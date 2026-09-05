@@ -793,7 +793,10 @@ class Novelist:
             roster_names=[c["name"] for c in self.roster()] or ["主角"],
             outline=outline_ctx,
             prev_summary=self.prev_summary(start),
-            constraints="\n".join(cons))
+            constraints="\n".join(cons),
+            plots_per_chapter=max(3, int(
+                (self.g["chapter_words_min"] + self.g["chapter_words_max"]) / 2
+                / (int(self.style.get("blockWords") or 500) * 0.8))))
         bg = self.sanitize_facts(self.ground("plot", context=self.p.read("outline.md")[:2500]))
         if bg:
             prompt += ("\n\n【现实参考资料 —— 本批剧情涉及的器物、行程、礼俗须符合下列常识；"
@@ -872,7 +875,11 @@ class Novelist:
         # 不合格自动重写一次 (只做一轮, 避免无限循环烧钱)
         if a["score"] < retry_on_low and text:
             probs = "；".join(f"{i['type']}{i.get('samples','')}" for i in a["issues"][:6])
+            over = a["stats"]["cn"] > target * 1.3
             fix = (f"下面这章 AI 味检测不合格（{a['score']}分）。问题：{probs}\n"
+                   + (f"另外字数严重超标（{a['stats']['cn']}/{target}），必须压缩到 "
+                      f"{target} 字左右，删掉旁枝末节与重复铺陈，保留主线与爽点。\n"
+                      if over else "")
                    f"禁用套话：{'、'.join(self.blacklist())}\n"
                    f"请重写，保持剧情完全不变，只改语言：去掉套话与 AI 腔，"
                    f"句式长短交错，段落节奏有变化，字数保持 {target} 字左右。"
@@ -985,6 +992,80 @@ class Novelist:
         self._log(f"自审@第{done[-1]}章 全书{ba['score']} 窗口{wa.get('score')} "
                   f"→ 守则 {len(guide)} 字")
         return {"book": ba, "window": wa, "guide": guide}
+
+    # ---------------- 章节重写 ----------------
+    def rewrite_chapter(self, n: int, mode: str = "polish", note: str = "",
+                        on_delta=None) -> Dict[str, Any]:
+        """三种重写模式（取自 x10086 novel-writing skill 的实践）。
+
+        polish  剧情完全不动，只改语言、节奏、对白
+        replace 整章重写，剧情可调，但必须衔接前后章
+        fork    从本章分叉出另一条线，旧稿保留为 .alt
+        旧稿一律先备份到 .ckpt/，永不覆盖丢失。
+        """
+        old = self.p.chapter(n)
+        if not old:
+            raise RuntimeError(f"第 {n} 章没有正文")
+        ck = self.p.dir / ".ckpt"
+        ck.mkdir(exist_ok=True)
+        ver = len(list(ck.glob(f"{n:03d}_v*.md"))) + 1
+        (ck / f"{n:03d}_v{ver}.md").write_text(old, encoding="utf-8")
+
+        co = self.p._load("chapter_outlines.json", {}).get(str(n), "")
+        asm = self.build_context(n, co)
+        L = asm["layers"]
+        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+        common = (f"【本章细纲】\n{co}\n\n【必守约束】\n{L.get('L5_constraint','')}\n\n"
+                  f"【前情】\n{L.get('L2_recent','')}\n")
+
+        if mode == "polish":
+            prompt = (f"下面这一章剧情不动，只改语言。\n{common}\n"
+                      f"改写要求：{note or '句式长短交错，去掉套话与 AI 腔，对白更有性格，节奏更紧'}\n"
+                      f"字数保持 {target} 字左右。剧情、人物、事件顺序一律不得改变。"
+                      f"直接输出正文，无前言。\n\n{old}")
+            profile = "polishing"
+        elif mode == "replace":
+            prompt = (f"重写《{self.p.meta.get('title','')}》第 {n} 章。\n{common}\n"
+                      f"重写方向：{note or '按细纲重新组织，加强冲突与钩子'}\n"
+                      f"必须与前后章衔接。字数 {target} 字左右。直接输出正文，无前言。\n\n"
+                      f"【原稿供参考，可大幅改动】\n{old[:3000]}")
+            profile = "drafting"
+        elif mode == "fork":
+            (self.p.dir / f"chapters/{n:03d}.alt.md").write_text(old, encoding="utf-8")
+            prompt = (f"从第 {n} 章分叉出另一种走向。\n{common}\n"
+                      f"分叉方向：{note or '让本章的关键选择走向相反的结果'}\n"
+                      f"字数 {target} 字左右。直接输出正文，无前言。\n\n"
+                      f"【原线供对照】\n{old[:2500]}")
+            profile = "drafting"
+        else:
+            raise ValueError(f"未知模式 {mode}，可选 polish/replace/fork")
+
+        r = call(profile, prompt, on_delta, max_tokens=self.g["max_tokens_draft"])
+        new = re.sub(r"【字数标记[^】]*】\s*", "", clean(r.text))
+        if not new or len(new) < len(old) * 0.4:
+            return {"ok": False, "msg": "重写结果过短，已保留原稿",
+                    "backup": f".ckpt/{n:03d}_v{ver}.md"}
+
+        self.p.write(self.p.chapter_path(n), new)
+        a = audit(new, extra_blacklist=self.blacklist(), target_words=target)
+        self.p.write(f"audit/{n:03d}.json", json.dumps(a, ensure_ascii=False, indent=2))
+        self.p.state.setdefault("summaries", {})[str(n)] = self._extract_state(n, new)
+        self.p.mem.add("plot", f"ch{n}", f"第{n}章", new[:1500])
+
+        # 剧情有变时提示下游受影响的章节
+        affected = []
+        if mode in ("replace", "fork"):
+            done = sorted(self.p.state.get("done", []))
+            affected = [x for x in done if x > n][:5]
+        log = self.p._load("edit_log.json", [])
+        log.append({"chapter": n, "mode": mode, "note": note, "backup": f"{n:03d}_v{ver}.md",
+                    "score_before": None, "score_after": a["score"]})
+        self.p.write("edit_log.json", json.dumps(log, ensure_ascii=False, indent=2))
+        self._log(f"第{n}章 {mode} 重写 → {a['stats']['cn']}字 得分{a['score']}"
+                  + (f"，可能影响后续 {affected}" if affected else ""))
+        return {"ok": True, "mode": mode, "score": a["score"],
+                "chars": a["stats"]["cn"], "backup": f".ckpt/{n:03d}_v{ver}.md",
+                "affected": affected}
 
     def _extract_state(self, n: int, text: str) -> str:
         """一次调用抽出: 本章摘要 / 新埋与回收的伏笔 / 角色状态变化 / 时间推进。

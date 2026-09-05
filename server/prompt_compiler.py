@@ -88,8 +88,14 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
                            block_words: int = 500) -> str:
     """编译单章正文提示词。"""
     plots = to_plot_list(chapter_outline)
-    plot_block = "\n".join(f"剧情{i+1}：{p}" for i, p in enumerate(plots)) or chapter_outline
     blocks = max(1, round(target_words / block_words))
+    # 剧情条数必须与字数配额匹配 —— 实测给 10 条剧情写 2600 字, 模型会写到 4300 字。
+    # 每条剧情大约需要 block_words*0.8 字才能展开, 超出的合并进最后一条。
+    max_plots = max(3, int(target_words / (block_words * 0.8)))
+    if len(plots) > max_plots:
+        head, tail = plots[:max_plots - 1], plots[max_plots - 1:]
+        plots = head + ["；".join(tail)[:160]]
+    plot_block = "\n".join(f"剧情{i+1}：{p}" for i, p in enumerate(plots)) or chapter_outline
 
     seg: List[str] = []
     seg.append(
@@ -97,8 +103,10 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
         f"遵守规则创作{target_words}字左右的章节小说。"
         f"写作手法需要{manner}，不要过度延申，不要在结尾进行总结，"
         f"对于剧情中的内容在正文中需要用网文作者的口吻去描写，包括语言、行为、人物。"
-        f"每写满{block_words}字换一个大段落，并在该段开头标记【字数标记xx字】"
-        f"（xx 为累计字数），全章共约 {blocks} 块。")
+        f"字数是硬指标：全章 {blocks} 块，每块约 {block_words} 字，"
+        f"合计 {target_words} 字（可上下浮动 15%，绝不许超过 {int(target_words*1.3)} 字）。"
+        f"每写满 {block_words} 字换一个大段落，段首标【字数标记xx字】（xx 为累计字数）。"
+        f"写完第 {blocks} 块立刻收尾留钩子，不要再展开新情节。")
 
     if genre_line:
         seg.append(f"\n#小说类型：{genre_line}")
@@ -123,15 +131,18 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
     if positive:
         seg.append("\n#正向提示词库（尽量多使用，写出网感）\n" + " ".join(positive))
 
-    seg.append(f"\n#本章剧情\n{plot_block}\n【剧情结束】")
-    seg.append("\n直接输出正文，不要任何前言、标题或说明。")
+    seg.append(f"\n#本章剧情（共 {len(plots)} 条，每条约 {int(target_words/max(1,len(plots)))} 字）"
+               f"\n{plot_block}\n【剧情结束】")
+    seg.append(f"\n再次确认：全章 {target_words} 字左右，写完 {len(plots)} 条剧情即收尾。"
+               f"直接输出正文，不要任何前言、标题或说明。")
     return "\n".join(seg)
 
 
 def compile_outline_prompt(*, title: str, start: int, count: int,
                            genre_line: str, world_digest: str,
                            roster_names: List[str], outline: str,
-                           prev_summary: str, constraints: str) -> str:
+                           prev_summary: str, constraints: str,
+                           plots_per_chapter: int = 6) -> str:
     """编译分章细纲提示词 —— 输出编号剧情清单，而不是散文。"""
     return (
         f"你是{genre_line}的网文策划。为《{title}》写第 {start}-{start+count-1} 章的细纲。\n\n"
@@ -146,7 +157,7 @@ def compile_outline_prompt(*, title: str, start: int, count: int,
         f"剧情1：（一个具体动作或事件，一句话）\n"
         f"剧情2：…\n"
         f"剧情3：…\n"
-        f"（每章 6-10 条剧情，要能直接照着写，不要写成概括）\n"
+        f"（每章 {plots_per_chapter} 条剧情，要能直接照着写，不要写成概括）\n"
         f"爽点：…\n"
         f"章末钩子：…\n\n"
         f"直接输出，无前言。")

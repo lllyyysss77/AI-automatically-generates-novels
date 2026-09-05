@@ -79,6 +79,14 @@ def cmd_run(a):
         print(f"速率 {speed:.0f} 字/秒  剩余 {left:,} 字 预计 {left/speed/3600:.1f} 小时" if speed else "")
 
 
+def cmd_rewrite(a):
+    p = Project(slugify(a.title))
+    if not p.meta:
+        sys.exit("项目不存在")
+    r = Novelist(p).rewrite_chapter(a.chapter, mode=a.mode, note=a.note)
+    print(json.dumps(r, ensure_ascii=False, indent=2))
+
+
 def cmd_status(a):
     p = Project(slugify(a.title))
     if not p.meta:
@@ -111,6 +119,12 @@ if __name__ == "__main__":
     r = sub.add_parser("run"); r.set_defaults(f=cmd_run)
     r.add_argument("--title", required=True)
     r.add_argument("--chapters", type=int, default=3)
+
+    w = sub.add_parser("rewrite"); w.set_defaults(f=cmd_rewrite)
+    w.add_argument("--title", required=True)
+    w.add_argument("--chapter", type=int, required=True)
+    w.add_argument("--mode", default="polish", choices=["polish", "replace", "fork"])
+    w.add_argument("--note", default="")
 
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
     s.add_argument("--title", required=True)

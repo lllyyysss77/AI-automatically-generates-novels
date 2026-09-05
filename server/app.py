@@ -214,6 +214,18 @@ def save_chapter(slug: str, n: int):
     return jsonify({"ok": True, "audit": a})
 
 
+@app.post("/api/projects/<slug>/rewrite/<int:n>")
+def rewrite_api(slug: str, n: int):
+    """章节重写: polish(只改语言) / replace(整章重写) / fork(分叉)。旧稿自动备份。"""
+    p = Project(slug)
+    b = request.json or {}
+    try:
+        return jsonify(Novelist(p).rewrite_chapter(
+            n, mode=b.get("mode", "polish"), note=b.get("note", "")))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
 @app.get("/api/projects/<slug>/memory")
 def mem_search(slug: str):
     p = Project(slug)
