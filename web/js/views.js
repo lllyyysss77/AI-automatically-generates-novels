@@ -103,7 +103,8 @@ function newProjectModal() {
 
 /* ─────────────────────────── 项目详情 ─────────────────────────── */
 const TABS = [['overview','概览'],['setup','设定'],['outline','大纲'],
-              ['chapters','章节'],['quality','质检'],['memory','记忆'],['export','导出']];
+              ['chapters','章节'],['quality','质检'],['memory','记忆'],
+              ['teardown','拆书'],['export','导出']];
 
 const ProjectView = {
   title: () => S.cur ? S.cur.meta.title : '项目',
@@ -196,6 +197,21 @@ const TabRender = {
         <div class="card-sub" style="margin-top:8px">选中文字 → 右键 → 扩写 / 润色 / 去 AI 味 / 加冲突…（菜单来自内容类型包 + 题材包）</div>
         </div></div>`;
   },
+  teardown(p) {
+    return `<div class="card"><div class="card-head"><div class="card-title">拆书</div>
+        <div class="card-sub">把一本现成的小说拆成可复用素材，并直接写进本项目</div>
+        <div class="card-actions"><button class="btn btn-sm btn-primary" id="td-go">开始拆解</button></div></div>
+        <div class="field"><label>粘贴整本或部分正文（≥500 字）</label>
+          <textarea class="ta" id="td-text" style="min-height:150px"
+            placeholder="支持「第N章」「Chapter N」「N、标题」等章节标记；识别不出时按 3000 字自动分段"></textarea></div>
+        <div class="row" style="align-items:flex-end">
+          <div class="field" style="margin:0"><label>抽样章数（章多时避免整本烧钱）</label>
+            <input class="input" id="td-n" type="number" value="8"></div>
+          <div class="field" style="margin:0"><label>写入本项目</label>
+            <select class="select" id="td-apply"><option value="1">是（世界观/角色/爽点/文风入库）</option>
+              <option value="0">否（只看结果）</option></select></div></div>
+        <div class="mono-log" id="td-out" style="margin-top:14px;max-height:420px">等待拆解…</div></div>`;
+  },
   quality(p) {
     return `<div class="card"><div class="card-head"><div class="card-title">三层质检</div>
         <div class="card-sub">单章合格 ≠ 全书合格：逐章 95 分的稿子，全书体检可能只有 20 分</div>
@@ -276,6 +292,22 @@ const TabMount = {
       bindMenus();
     });
     bindMenus();
+  },
+  teardown() {
+    $('#td-go').onclick = async () => {
+      const text = $('#td-text').value;
+      if (text.length < 500) return toast('文本太短（至少 500 字）', 'err');
+      $('#td-out').textContent = '';
+      $('#td-go').disabled = true;
+      await API.stream('/api/teardown', {
+        text, sample: +$('#td-n').value || 8,
+        slug: $('#td-apply').value === '1' ? S.cur.slug : null
+      }, {
+        onText: t => { $('#td-out').textContent += t; $('#td-out').scrollTop = 1e9; },
+        onError: e => toast('拆书失败：' + e.message, 'err'),
+        onDone: () => { $('#td-go').disabled = false; toast('拆书完成', 'ok'); }
+      });
+    };
   },
   quality() {
     const slug = encodeURIComponent(S.cur.slug);
