@@ -106,7 +106,8 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
         f"写作手法需要{manner}，不要过度延申，不要在结尾进行总结，"
         f"对于剧情中的内容在正文中需要用网文作者的口吻去描写，包括语言、行为、人物。"
         f"字数是硬指标：全章 {blocks} 块，每块约 {block_words} 字，"
-        f"合计 {target_words} 字（可上下浮动 15%，绝不许超过 {int(target_words*1.3)} 字）。"
+        f"合计 {target_words} 字。**超过 {int(target_words*1.15)} 字视为不合格**，"
+        f"宁可写短也不要写长；描写点到即止，不铺陈、不复述已知信息。"
         f"每写满 {block_words} 字换一个大段落，段首标【字数标记xx字】（xx 为累计字数）。"
         f"写完第 {blocks} 块立刻收尾留钩子，不要再展开新情节。")
     # 称谓规则必须放在最前面 —— 埋进「必守约束」里模型基本不看,

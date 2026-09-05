@@ -619,6 +619,19 @@ class Novelist:
                         + " —— 接下来几章内安排他们出场并有实质戏份。")
         if lr.get("drop_roles"):
             cons.append("【已废弃角色，不得再提】" + "、".join(lr["drop_roles"][:6]))
+        # 开篇去重 —— 自检报告「连续两章寅时三刻开篇」, 光靠事后判雷同没用,
+        # 必须把上几章的开篇原样给模型看, 让它主动避开。
+        done = sorted(self.p.state.get("done", []))
+        heads = []
+        for i in done[-3:]:
+            first = next((ln.strip() for ln in self.p.chapter(i).splitlines()
+                          if ln.strip()), "")
+            if first:
+                heads.append(f"第{i}章：{first[:36]}")
+        if heads:
+            cons.append("【开篇必须换花样】前几章是这样开场的——" + "；".join(heads)
+                        + "。本章开篇的时间词、地点、句式、视角都不得与之雷同，"
+                        "换一种切入方式（如直接对白、动作特写、他人视角）。")
         tg = self.tic_guard()
         if tg:
             cons.append("【口癖抑制】" + tg)
@@ -626,7 +639,8 @@ class Novelist:
                     "配角不能只当背景板；不得给已知人物随意安排与其身份不符的官职。")
         bl = self.blacklist()
         if bl:
-            cons.append("禁用套话：" + "、".join(bl))
+            cons.append("禁用套话（含任何变体，如禁「冷笑一声」则「冷笑」「冷笑道」"
+                        "「嗤笑一声」同样禁止）：" + "、".join(bl))
         pend = self.p.mem.pending_foreshadow()
         if pend:
             old = [f for f in pend if n - f["planted"] >= 15]
@@ -912,12 +926,16 @@ class Novelist:
             block_words=int(st.get("blockWords") or 500),
         )
         self.p.write(f"audit/{n:03d}.prompt.txt", prompt)
-        r = call("drafting", prompt, on_delta, max_tokens=self.g["max_tokens_draft"])
+        # 按目标字数推导 max_tokens 做硬上限 —— 8192 太宽松, 实测普遍超 10~50%。
+        # 中文约 1 字 1.4 token, 留 1.25 倍余量给标点与收尾。
+        cap = min(self.g["max_tokens_draft"], int(target / 0.7 * 1.25))
+        r = call("drafting", prompt, on_delta, max_tokens=cap)
         # 去掉模型输出里的【字数标记】—— 它只是写作时的计数脚手架, 不进成稿
         r.text = re.sub(r"【字数标记[^】]*】\s*", "", r.text)
         text = clean(r.text)
 
-        a = audit(text, extra_blacklist=self.blacklist(), target_words=target)
+        a = audit(text, extra_blacklist=self.blacklist(), target_words=target,
+                  check_modern=self.history_mode() in ("real", "alt"))
         pos = st.get("positive", [])
         if pos:
             used = [w for w in pos if w in text]
@@ -932,7 +950,7 @@ class Novelist:
         if a["score"] < retry_on_low and text:
             probs = "；".join(f"{i['type']}{i.get('samples','')}" for i in a["issues"][:6])
             over_note = ""
-            if a["stats"]["cn"] > target * 1.3:
+            if a["stats"]["cn"] > target * 1.15:
                 over_note = (f"另外字数严重超标（{a['stats']['cn']}/{target}），必须压缩到 "
                              f"{target} 字左右，删掉旁枝末节与重复铺陈，保留主线与爽点。\n")
             fix = (f"下面这章 AI 味检测不合格（{a['score']}分）。问题：{probs}\n"

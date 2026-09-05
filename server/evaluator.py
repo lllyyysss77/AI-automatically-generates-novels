@@ -24,10 +24,12 @@ CLICHES_COMMON = ["总而言之", "综上所述", "值得一提的是", "不得�
 # 合计 9 次全部绕过。所以套话检测必须用词根正则, 不能只做子串匹配。
 CLICHE_PATTERNS = [
     (r"瞳孔(?:[一猛骤]?[缩紧])|瞳孔[^。，！？]{0,4}(?:收缩|骤缩|一缩)", "瞳孔X缩"),
-    (r"(?:冷笑|嗤笑|嘲讽地笑)(?:了)?一声", "冷笑一声"),
+    (r"(?:冷笑|嗤笑|嘲笑|讥笑)(?:了)?(?:一声)?(?=[，,。：:“\"、\s]|道|着)", "冷笑"),
     (r"嘴角(?:微微)?(?:勾起|上扬|扯出|噙着|挑起)", "嘴角勾起"),
     (r"缓缓(?:打开|起身|睁开|抬起|转过|站起|放下|开口|点头)", "缓缓X"),
     (r"深(?:深)?吸(?:了)?一口(?:凉)?气", "深吸一口气"),
+    (r"眼底(?:寒光|冷光|精光)(?:一闪|闪过)", "眼底寒光一闪"),
+    (r"[一-鿿]{0,2}嘴角(?:抽动|一抽)", "嘴角抽动"),
     (r"心(?:里|中|头)(?:猛地)?咯噔", "心里咯噔"),
     (r"(?:不敢|难以)置信", "不可置信"),
     (r"眼神(?:变得)?(?:冰冷|冷冽|骤冷)|眼神(?:陡然|骤然)[^。，]{0,3}冷", "眼神变冷"),
@@ -51,12 +53,24 @@ DEFAULT_TICS = [
 HOLLOW = ["非常", "十分", "特别", "极其", "格外", "尤其"]
 
 
+# 现代概念 -> 古代对应说法。写历史/架空题材时直接抛现代词是硬伤,
+# 但模型很难自觉替换, 需要机器检测出来。
+MODERN_TERMS: Dict[str, str] = {
+    "现金流": "银钱周转", "成本": "本钱", "利润": "出息／利钱", "投资": "出本／入股",
+    "风险": "干系", "效率": "省工省时", "项目": "这桩事", "团队": "一班人手",
+    "数据": "簿册／数目", "系统": "章程", "资本": "本金", "市场": "行市",
+    "客户": "主顾", "供应链": "货源", "股权": "股份", "分红": "分利",
+    "评估": "估量", "策略": "谋划", "资源": "人手财货", "流程": "章程步骤",
+    "信息": "消息", "逻辑": "道理", "概念": "说法", "模式": "路数",
+}
+
+
 def cn_len(t: str) -> int:
     return len(re.findall(r"[一-鿿]", t))
 
 
 def audit(text: str, extra_blacklist: List[str] | None = None,
-          target_words: int = 0) -> Dict[str, Any]:
+          target_words: int = 0, check_modern: bool = False) -> Dict[str, Any]:
     """返回 {score, issues[], stats{}}  score 100 分制, 越高越好."""
     cn = cn_len(text)
     if cn < 100:
@@ -90,6 +104,14 @@ def audit(text: str, extra_blacklist: List[str] | None = None,
                        "per_1k": round(per_k(sum(pat_hits.values())), 2),
                        "samples": [f"{k}×{v}" for k, v in
                                    sorted(pat_hits.items(), key=lambda x: -x[1])[:5]]})
+
+    # 3.5 现代词泄漏 (历史/架空题材)
+    if check_modern:
+        mod = {w: text.count(w) for w in MODERN_TERMS if w in text}
+        if mod:
+            issues.append({"level": "mid", "type": "现代词泄漏",
+                           "count": sum(mod.values()),
+                           "samples": [f"{w}→{MODERN_TERMS[w]}" for w in list(mod)[:5]]})
 
     # 4 题材专属黑名单 —— 出现即算失败
     for w in (extra_blacklist or []):
