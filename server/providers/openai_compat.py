@@ -35,6 +35,7 @@ class OpenAICompatProvider(BaseProvider):
 
         kw: model / temperature / max_tokens / thinking(bool)
         """
+        self.last_usage = {}
         thinking = kw.pop("thinking", False)
         body: Dict[str, Any] = {
             "model": kw.pop("model", self.cfg.get("default_model")),
@@ -81,3 +82,8 @@ class OpenAICompatProvider(BaseProvider):
             d = self.adapt(choices[0].get("delta") or {})
             if d:
                 yield d
+            u = chunk.get("usage")
+            if u:                       # vLLM/网关在末帧带 usage
+                self.last_usage = {"prompt": u.get("prompt_tokens"),
+                                   "completion": u.get("completion_tokens"),
+                                   "total": u.get("total_tokens")}

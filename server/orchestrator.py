@@ -135,6 +135,15 @@ class Project:
         if scores:
             lines += [f"- 平均 AI 味得分: **{sum(scores)/len(scores):.1f}** / 100",
                       f"- 最低分章节: 第 {done[scores.index(min(scores))]} 章 ({min(scores)} 分)"]
+        u = self.state.get("usage") or {}
+        if u:
+            lines += ["", "## 用量",
+                      f"- 调用 {u.get('calls',0)} 次 / 累计 {u.get('total',0):,} token"
+                      f"（入 {u.get('prompt',0):,} 出 {u.get('completion',0):,}）",
+                      f"- 模型耗时 {u.get('elapsed_s',0)} 秒"]
+            for k, v in (u.get("by_profile") or {}).items():
+                lines.append(f"  - {k}: {v['calls']} 次 / "
+                             f"{v['prompt']+v['completion']:,} token")
         lines += ["", "## 最近日志"] + [f"- {x}" for x in self.state.get("log", [])[-12:]]
         return "\n".join(lines)
 
@@ -146,6 +155,27 @@ class GenResult:
     reasoning: str = ""
     elapsed: float = 0.0
     chars: int = 0
+    usage: Dict[str, Any] = field(default_factory=dict)
+
+
+# 全进程用量累计. 网关不返回 usage 时按中文 1 字≈1.4token 估算, 标记 estimated。
+USAGE: Dict[str, Any] = {"calls": 0, "prompt": 0, "completion": 0,
+                         "elapsed": 0.0, "by_profile": {}}
+
+
+def _record(profile: str, prompt_chars: int, res: "GenResult") -> None:
+    u = res.usage or {}
+    pt = u.get("prompt") or int(prompt_chars / 0.7)
+    ct = u.get("completion") or int((len(res.text) + len(res.reasoning)) / 0.7)
+    USAGE["calls"] += 1
+    USAGE["prompt"] += pt
+    USAGE["completion"] += ct
+    USAGE["elapsed"] += res.elapsed
+    b = USAGE["by_profile"].setdefault(profile, {"calls": 0, "prompt": 0,
+                                                 "completion": 0, "elapsed": 0.0})
+    b["calls"] += 1; b["prompt"] += pt; b["completion"] += ct; b["elapsed"] += res.elapsed
+    res.usage = {"prompt": pt, "completion": ct,
+                 "estimated": not (u.get("prompt") or u.get("completion"))}
 
 
 def call(profile: str, prompt: str, on_delta: Optional[Callable[[str], None]] = None,
@@ -174,6 +204,7 @@ def call(profile: str, prompt: str, on_delta: Optional[Callable[[str], None]] = 
             think.append(d.reasoning)
     out = "".join(text).strip()
     rsn = "".join(think)
+    raw_usage = getattr(provider, "last_usage", {}) or {}
     if not out and rsn:          # ★ 兜底 1: 答案被 <answer> 包在 reasoning 里
         out = provider.salvage(rsn)
         if on_delta and out:
@@ -181,7 +212,10 @@ def call(profile: str, prompt: str, on_delta: Optional[Callable[[str], None]] = 
     if not out and _retry:       # ★ 兜底 2: 关思考重试, 把 token 全给正文
         print("  [call] 输出为空, 关思考重试", flush=True)
         return call(profile, prompt, on_delta, system, max_tokens, _retry=False)
-    return GenResult(text=out, reasoning=rsn, elapsed=time.time() - t0, chars=len(out))
+    res = GenResult(text=out, reasoning=rsn, elapsed=time.time() - t0,
+                    chars=len(out), usage=dict(raw_usage))
+    _record(profile, sum(len(m["content"]) for m in msgs), res)
+    return res
 
 
 # 模型经常把提示词里的括号说明当模板抄进正文, 例如
@@ -811,6 +845,7 @@ class Novelist:
         return parts
 
     def step_chapter(self, n: int, on_delta=None, retry_on_low: int | None = None) -> Dict[str, Any]:
+        self._check_budget()
         retry_on_low = retry_on_low if retry_on_low is not None else self.q["audit_pass_score"]
         outlines = self.p._load("chapter_outlines.json", {})
         co = outlines.get(str(n), "")
@@ -921,6 +956,7 @@ class Novelist:
                   + f" / 记忆 {rep['used']}tok({rep['usage_pct']}%)"
                   + (f" 溢出:{','.join(rep['overflow'])}" if rep["overflow"] else "")
                   + ("（已重写）" if a.get("rewritten") else ""))
+        self.p.state["usage"] = self._usage_snapshot()
         self.p.save()
         self.p.write("PROJECT_BOARD.md", self.p.board())
 
@@ -1125,6 +1161,20 @@ class Novelist:
                               f"保留关键人物、转折、伏笔。直接输出：\n\n{body}", max_tokens=1000)
         self.p.write(f"l2_summary/{a:03d}-{b:03d}.md", clean(r.text))
         self._log(f"L2 摘要 {a}-{b} 完成")
+
+    def _usage_snapshot(self) -> Dict[str, Any]:
+        return {"calls": USAGE["calls"], "prompt": USAGE["prompt"],
+                "completion": USAGE["completion"],
+                "total": USAGE["prompt"] + USAGE["completion"],
+                "elapsed_s": round(USAGE["elapsed"], 1),
+                "by_profile": {k: dict(v) for k, v in USAGE["by_profile"].items()}}
+
+    def _check_budget(self) -> None:
+        """daily_call_budget 之前是空壳没人读。0 = 不限。"""
+        lim = int(self.cfg["limits"].get("daily_call_budget") or 0)
+        if lim and USAGE["calls"] >= lim:
+            raise RuntimeError(f"已达调用预算上限 {lim} 次（config/settings.yaml → "
+                               f"limits.daily_call_budget），本次停止")
 
     def _log(self, msg: str):
         ts = time.strftime("%H:%M:%S")

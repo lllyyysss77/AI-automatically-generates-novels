@@ -250,6 +250,13 @@ def context_report(slug: str, n: int):
     return jsonify(Novelist(p).build_context(n, co)["report"])
 
 
+@app.get("/api/usage")
+def usage_api():
+    from server.orchestrator import USAGE
+    return jsonify({**USAGE, "total": USAGE["prompt"] + USAGE["completion"],
+                    "budget": load_settings()["limits"].get("daily_call_budget", 0)})
+
+
 @app.get("/api/projects/<slug>/bookaudit")
 def book_audit_api(slug: str):
     """全书体检 —— 单章合格不等于全书合格。"""

@@ -112,7 +112,11 @@ def audit(text: str, extra_blacklist: List[str] | None = None,
             break
 
     # 7 对话占比
-    dialog = sum(len(m) for m in re.findall(r"[""][^""]*[""]|「[^」]*」", text))
+    # 引号用码点构造，避免源码里的中文弯引号被编辑器规范化成直引号
+    _LQ, _RQ = chr(0x201C), chr(0x201D)
+    _LB, _RB = chr(0x300C), chr(0x300D)
+    _pat = f"[{_LQ}][^{_RQ}]*[{_RQ}]|[{_LB}][^{_RB}]*[{_RB}]"
+    dialog = sum(len(m) for m in re.findall(_pat, text))
     ratio = dialog / max(1, len(text))
     if ratio < 0.15:
         issues.append({"level": "low", "type": "对话过少", "ratio": round(ratio, 3)})
