@@ -239,7 +239,20 @@ def c13(page):
     page.set_viewport_size({"width": 1440, "height": 900})
 
 
-CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+@case(14, "网关接入自检：报告实际字段与首字延迟")
+def c14(page):
+    page.goto(BASE, wait_until="networkidle")
+    page.click('.nav-item[data-view="packs"]')
+    page.wait_for_selector(".probe-btn", timeout=15000)
+    page.locator(".probe-btn").first.click()
+    page.wait_for_selector(".probe-out .badge", timeout=60000)
+    out = page.locator(".probe-out").first.inner_text()
+    assert "通" in out, f"自检未通过: {out}"
+    assert "字段" in out and "首字" in out, f"自检信息不全: {out}"
+    shot(page, "14-probe")
+
+
+CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14]
 
 
 def main():

@@ -144,13 +144,30 @@ tests/e2e/    run.py            projects/  运行时项目目录
 |---|---|---|
 | `Qwen3.8-Flash-Next`（自建 vLLM） | `reasoning` | 非标准 |
 | `qwen3.8-max / flash`（聚合网关） | `reasoning_content` | DeepSeek 系约定 |
+| Anthropic / Gemini 兼容层 | `thinking` / `thought` | 且 `content` 是 **块数组** |
+| 文心一言兼容层 | — | 正文字段叫 `result` |
+| Ollama 兼容层 | — | 内容嵌在 `message` 里 |
 | 多数模型 | — | 只有 `content` |
+
+正文字段同样做了形状兼容：字符串 / `[{"type":"text","text":…}]` / `[{"text":…}]` /
+`{"text":…}` / 字符串数组 / `message` 嵌套，共 11 种形状实测通过。
 
 老版只读 `delta.content`，接 Qwen3.8 **输出一片空白**。现在：三种命名全兼容，
 `content` 为空时先从 `<answer>` 标签抢救，再不行自动**关思考重试**。
 
 > **创作任务默认关思考**。实测 `qwen3.8-flash` 开思考写 338 字正文烧掉 2186 字思考
 > （86.6% 浪费），首字慢 6.6 倍，质量无差别。只在规划 / 体检 / 打分时开。
+
+**接新模型先跑自检** —— 插件包页每个网关有「自检」按钮，或直接调接口：
+
+```bash
+curl -s localhost:60001/api/probe -H 'Content-Type: application/json' \
+     -d '{"gateway":"gw1"}'
+# → fields_seen: ["content"]  first_token_s: 0.83  diagnosis: 正常：内容走 content
+```
+
+它会打一发真实请求，报告该网关**实际用的字段名**、首字延迟、是否需要 `<answer>` 抢救。
+接入出现空白时先跑这个，一眼定位是字段名对不上还是模型本身不返回。
 
 分层调度在 `config/providers.yaml`：
 

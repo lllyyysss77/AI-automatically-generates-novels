@@ -477,11 +477,30 @@ const PacksView = {
       + sec('平台文风', `${c.styles.length} 个`,
         `<div class="pill-group">${c.styles.map(g=>`<div class="pill">${esc(g.name)}</div>`).join('')}</div>`)
       + sec('模型网关', `${c.gateways.length} 个 · 地址与密钥来自 .env，不进仓库`,
-        `<table class="tbl"><thead><tr><th>网关</th><th>默认模型</th><th>上下文</th></tr></thead><tbody>` +
+        `<table class="tbl"><thead><tr><th>网关</th><th>默认模型</th><th>上下文</th><th>接入自检</th></tr></thead><tbody>` +
         c.gateways.map(g=>`<tr><td>${esc(g.label)}</td><td><code>${esc(g.model||'')}</code></td>
-          <td>${fmtNum(g.context_window)}</td></tr>`).join('') + `</tbody></table>`);
+          <td>${fmtNum(g.context_window)}</td>
+          <td><button class="btn btn-sm probe-btn" data-gw="${esc(g.id)}">自检</button>
+            <span class="probe-out" data-gw="${esc(g.id)}"></span></td></tr>`).join('')
+        + `</tbody></table>
+        <div class="card-sub" style="margin-top:10px">各厂商「OpenAI 兼容」的字段名并不统一
+        （content / reasoning_content / reasoning / result / parts…）。自检会打一发真实请求，
+        报告该网关实际用的字段与首字延迟 —— 接新模型出现空白时先跑这个。</div>`);
   },
   mount() {
+    $$('.probe-btn').forEach(b => b.onclick = async () => {
+      const gw = b.dataset.gw;
+      const out = $(`.probe-out[data-gw="${gw}"]`);
+      b.disabled = true; out.innerHTML = ' <span class="card-sub">检测中…</span>';
+      try {
+        const r = await API.post('/api/probe', {gateway: gw});
+        out.innerHTML = ` <span class="badge badge-${r.ok?'ok':'err'}">${r.ok?'通':'异常'}</span>
+          <span class="card-sub" style="font-family:var(--mono)">
+          字段 ${esc((r.fields_seen||[]).join('/'))} · 首字 ${r.first_token_s ?? '-'}s</span>
+          <div class="card-sub">${esc(r.diagnosis || r.error || '')}</div>`;
+      } catch(e) { out.innerHTML = ` <span class="badge badge-err">失败</span>`; }
+      b.disabled = false;
+    });
     $$('.genre-pill').forEach(p => p.onclick = async () => {
       $$('.genre-pill').forEach(x=>x.classList.remove('active')); p.classList.add('active');
       const g = await API.get('/api/genre/'+p.dataset.id);

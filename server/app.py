@@ -11,6 +11,7 @@ from urllib.parse import quote
 import re
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterator
@@ -56,6 +57,62 @@ def assets(f: str):
 def health():
     return jsonify({"ok": True, "gateways": len(registry.gateways),
                     "types": len(registry.types), "genres": len(registry.genres)})
+
+
+@app.post("/api/probe")
+def probe():
+    """接入自检: 打一发真实请求, 报告该网关实际用的字段名与耗时.
+
+    接新模型时最常见的坑是"OpenAI 兼容"但字段名不一样, 表现为前端一片空白。
+    先跑这个, 一眼看出它把内容放在 content 还是 reasoning / result / parts。
+    """
+    b = request.json or {}
+    gw = b.get("gateway") or next(iter(registry.gateways), None)
+    if gw not in registry.gateways:
+        return jsonify({"ok": False, "error": f"未知网关 {gw}"}), 400
+    provider = registry.provider(gw)
+    provider.seen_fields = set()
+    model = b.get("model") or registry.gateways[gw].get("default_model")
+    t0 = time.time()
+    text, reason, chunks, first = [], [], 0, None
+    try:
+        for d in provider.stream(
+                [{"role": "user", "content": b.get("prompt") or "只回复两个字：收到"}],
+                model=model, thinking=bool(b.get("thinking")), max_tokens=64):
+            chunks += 1
+            if d.text:
+                if first is None:
+                    first = round(time.time() - t0, 2)
+                text.append(d.text)
+            if d.reasoning:
+                reason.append(d.reasoning)
+    except Exception as e:
+        return jsonify({"ok": False, "gateway": gw, "model": model,
+                        "error": str(e)[:400]}), 200
+
+    body = "".join(text)
+    rsn = "".join(reason)
+    salvaged = ""
+    if not body and rsn:
+        salvaged = provider.salvage(rsn)
+    return jsonify({
+        "ok": bool(body or salvaged),
+        "gateway": gw, "model": model,
+        "fields_seen": sorted(provider.seen_fields) or ["(未命中任何已知字段)"],
+        "declared_reasoning_field": provider.reasoning_field,
+        "chunks": chunks,
+        "first_token_s": first,
+        "elapsed_s": round(time.time() - t0, 2),
+        "content_chars": len(body),
+        "reasoning_chars": len(rsn),
+        "salvaged_from_answer_tag": bool(salvaged),
+        "sample": (body or salvaged)[:120],
+        "diagnosis": (
+            "正常：内容走 content" if body and not rsn else
+            "正常：内容走 content，另有思考流（创作类建议关思考）" if body and rsn else
+            "内容被包在 <answer> 里，已抢救" if salvaged else
+            "该网关未返回可用正文 —— 检查 reasoning_field 声明或换模型"),
+    })
 
 
 @app.get("/api/catalog")
