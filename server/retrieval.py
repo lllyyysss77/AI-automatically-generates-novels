@@ -57,8 +57,10 @@ class Retriever:
     def __init__(self, memory, project_dir: Path, era: str = "",
                  enable_web: bool = True, endpoint: Optional[str] = None,
                  summarize: Optional[Callable[[str], str]] = None,
-                 topics: Optional[Dict[str, List[str]]] = None):
+                 topics: Optional[Dict[str, List[str]]] = None,
+                 plan: Optional[Callable[[str], str]] = None):
         self.topics = topics or {}
+        self.plan = plan                      # 让大模型决定"查什么"
         self.mem = memory
         self.dir = project_dir
         self.era = era
@@ -97,10 +99,22 @@ class Retriever:
         raw = "\n".join(f"- {h['title']}：{h['content'][:300]}" for h in hits)
         card = raw[:800]
         if self.summarize:
-            card = self.summarize(
-                f"把下面关于「{self.era} {topic}」的检索结果压成 5 条以内的写作硬事实，"
-                f"每条一句话带具体数字；互相矛盾的标「存疑」；不确定的不要写。"
-                f"直接输出，无前言。\n\n{raw[:4000]}") or card
+            got = self.summarize(
+                f"下面是检索「{self.era} {topic}」得到的结果。\n"
+                f"先判断这些结果是否真的回答了「{topic}」这个问题。\n"
+                f"- 如果**没有**（结果是无关的百科泛述、广告、或答非所问），"
+                f"只回复两个字：无\n"
+                f"- 如果有，压成 5 条以内的写作硬事实，每条一句话带具体数字；"
+                f"互相矛盾的标「存疑」；不确定的不要写\n"
+                f"直接输出，无前言。\n\n{raw[:4000]}") or ""
+            got = got.strip()
+            # 无关就不入库 —— 垃圾卡片既占预算又误导
+            if got in ("无", "", "None") or "无法生成" in got or "未包含" in got:
+                self.facts[topic] = {"topic": topic, "card": "", "sources": [],
+                                     "rejected": True, "built_at": time.strftime("%F %T")}
+                self._save()
+                return None
+            card = got
 
         rec = {"topic": topic, "card": card,
                "sources": [h["url"] for h in hits[:3]],
@@ -110,6 +124,54 @@ class Retriever:
         # 写回内部记忆 —— 下次同类问题直接内部命中, 不再联网
         self.mem.add("fact", f"fact-{topic}", f"考据·{topic}", card)
         return rec
+
+    # ---------------- 由大模型决定查什么 ----------------
+    def plan_queries(self, *, stage: str, context: str, k: int = 5,
+                     hints: Optional[List[str]] = None) -> List[Dict[str, str]]:
+        """让大模型读完设定/细纲后, 自己回答"这段要查证什么"。
+
+        正则触发词只认得「知县」「交子」这类历史词, 遇到"XP漏洞卖给微软换 40 万美金"
+        "养生茶注册非遗""LPL 春季赛 BP 规则"就完全抓不到。判断该查什么本身就是
+        个理解任务, 应该交给模型。
+        """
+        if not self.plan:
+            return []
+        hint_line = ("参考方向（可以不用）：" + "、".join(hints[:8])) if hints else ""
+        stage_desc = {"world": "构建世界观/时代背景", "cast": "设计人物与关系表",
+                      "plot": "设计章节剧情", "chapter": "写本章正文"}.get(stage, stage)
+        prompt = (
+            f"你在帮一位网文作者做资料准备。当前任务：{stage_desc}。\n\n"
+            f"下面是已有的设定与内容：\n{context[:3500]}\n\n"
+            f"{hint_line}\n\n"
+            f"请判断：写这部分时，哪些**具体的、写错了读者会发现**的事实需要查证？\n"
+            f"只挑真正需要外部资料的（真实的年份事件、行业数据、专业术语、制度规则、"
+            f"器物工艺、地理常识、法律法规、产品与公司…）。\n"
+            f"纯虚构设定（自创的功法、自创的国号、人物性格）不需要查，不要列。\n\n"
+            f"输出最多 {k} 条，每行一条，严格格式：\n"
+            f"主题|检索式\n"
+            f"（主题是 4-10 字的归类名，检索式是能直接丢进搜索引擎的一句话）\n"
+            f"如果确实没有需要查的，只输出一行：无\n"
+            f"直接输出，无前言。")
+        try:
+            raw = self.plan(prompt) or ""
+        except Exception as e:
+            print(f"[retrieval] 检索式规划失败, 降级正则: {e}")
+            return []
+        out: List[Dict[str, str]] = []
+        for line in raw.splitlines():
+            line = line.strip().lstrip("-*0123456789. ")
+            if not line or line == "无":
+                continue
+            if "|" in line or "｜" in line:
+                topic, q = re.split(r"[|｜]", line, 1)
+            else:
+                topic, q = line[:10], line
+            topic, q = topic.strip()[:20], q.strip()[:80]
+            if topic and q and len(q) > 3:
+                out.append({"topic": topic, "hint": topic, "query": q})
+            if len(out) >= k:
+                break
+        return out
 
     # ---------------- 主题落地 ----------------
     # 各创作阶段该查什么 —— 让世界观/人物/剧情都长在真实背景上
@@ -122,29 +184,34 @@ class Retriever:
     }
 
     def ground(self, stage: str, extra: Optional[List[str]] = None,
-               per_topic: int = 3) -> str:
+               per_topic: int = 3, context: str = "") -> str:
         """给某个创作阶段做背景落地: 批量查该阶段该知道的常识, 压成一块可注入文本。
 
         结果按主题缓存进 facts.json 与记忆索引, 全书只查一次, 后续阶段直接复用。
         """
-        topics = list((self.topics or {}).get(stage)
-                      or self.STAGE_TOPICS.get(stage, [])) + list(extra or [])
+        hints = list((self.topics or {}).get(stage) or self.STAGE_TOPICS.get(stage, []))
+        needs = self.plan_queries(stage=stage, context=context or "", hints=hints,
+                                  k=per_topic + 2) if context else []
+        if not needs:                       # 模型没给或不可用 -> 回退到题材包主题清单
+            needs = [{"topic": t, "hint": t, "query": f"{self.era} {t}"}
+                     for t in hints]
+        needs += [{"topic": e, "hint": e, "query": f"{self.era} {e}"} for e in (extra or [])]
+
         blocks: List[str] = []
-        for t in topics:
-            rec = self.facts.get(t)
-            if rec is None:
-                rec = self.fact_for({"topic": t, "hint": t,
-                                     "query": f"{self.era} {t}"}) or {}
-            card = (rec or {}).get("card")
+        for nd in needs:
+            rec = self.facts.get(nd["topic"]) or self.fact_for(nd) or {}
+            card = rec.get("card")
             if card:
-                blocks.append(f"【{t}】{card.strip()}")
+                blocks.append(f"【{nd['topic']}】{card.strip()}")
         return "\n\n".join(blocks)
 
     # ---------------- 统一召回 ----------------
     def recall(self, chapter_outline: str, k: int = 6) -> Dict[str, Any]:
         """返回 {items, internal, external, needs} —— 供 L4 层直接使用。"""
         internal = self.mem.search(chapter_outline, k=k)
-        needs = detect_fact_needs(chapter_outline, self.era)
+        needs = self.plan_queries(stage="chapter", context=chapter_outline, k=4)
+        if not needs:
+            needs = detect_fact_needs(chapter_outline, self.era)
         external: List[Dict[str, Any]] = []
         for nd in needs:
             rec = self.fact_for(nd)

@@ -39,6 +39,15 @@ CLICHE_PATTERNS = [
     (r"平静得(?:像是)?(?:一潭)?死水|(?:像|如)一潭死水", "一潭死水"),
 ]
 CLICHES_NOVEL = ["不可置信", "毛骨悚然", "不寒而栗", "汗毛倒竖", "空气仿佛凝固"]
+
+# 开局就该禁的默认口癖 —— 口癖统计要攒够 3 章才有数据, 而前 3 章恰恰最重要。
+# 实测新稿第 1 章第 18 行就写了「瞳孔骤缩」, 就是这个冷启动缺口。
+DEFAULT_TICS = [
+    "瞳孔一缩", "瞳孔骤缩", "瞳孔剧烈收缩", "冷笑一声", "嘴角勾起", "嘴角微微上扬",
+    "深吸一口气", "缓缓起身", "缓缓睁开", "缓缓打开", "心里咯噔", "不可置信",
+    "脸色惨白如纸", "抖得像风中的落叶", "毛骨悚然", "空气仿佛凝固", "眼神变得冰冷",
+    "如遭雷击", "浑身一震", "冷汗涔涔", "暗道不好", "似笑非笑地看着",
+]
 HOLLOW = ["非常", "十分", "特别", "极其", "格外", "尤其"]
 
 
@@ -141,8 +150,15 @@ def consistency(chapters: List[str], names: List[str]) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 全书体检
+# 网文里最常被顺手抓来用的真实历史人物 —— 架空世界出现即穿帮
+REAL_PEOPLE = ["赵构", "赵匡胤", "宋徽宗", "宋高宗", "蔡京", "高俅", "童贯", "秦桧",
+               "岳飞", "韩世忠", "李清照", "苏轼", "王安石", "司马光", "包拯",
+               "诸葛亮", "曹操", "魏征", "李世民", "武则天", "朱元璋", "康熙", "乾隆"]
+
+
 def book_audit(chapters: Dict[int, str], *, characters: List[str] | None = None,
                forbidden_terms: List[str] | None = None,
+               forbidden_people: List[str] | None = None,
                protagonist: str = "") -> Dict[str, Any]:
     """跨章体检 —— 单章合格不等于全书合格。
 
@@ -177,6 +193,13 @@ def book_audit(chapters: Dict[int, str], *, characters: List[str] | None = None,
     if forb:
         issues.append({"level": "high", "type": "禁用术语出现",
                        "detail": dict(sorted(forb.items(), key=lambda x: -x[1]))})
+
+    # 2.5 架空世界里的真实历史人物 (穿帮)
+    if forbidden_people:
+        pp = {n: allt.count(n) for n in forbidden_people if n in allt}
+        if pp:
+            issues.append({"level": "high", "type": "架空世界出现真实历史人物",
+                           "detail": dict(sorted(pp.items(), key=lambda x: -x[1]))})
 
     # 3 角色出场分布 —— 主角垄断 / 配角纸片人
     dist = []

@@ -249,6 +249,7 @@ def book_audit_api(slug: str):
     names = [c["name"] for c in nv.roster()] or ["主角"]
     return jsonify(book_audit(chs, characters=names,
                               forbidden_terms=anchor.get("forbidden"),
+                              forbidden_people=anchor.get("forbidden_people"),
                               protagonist=names[0] if names else ""))
 
 
@@ -351,6 +352,10 @@ def step(slug: str):
                                                      p.cfg["generation"]["outline_batch"]), emit)
             elif what == "repair":
                 nv.step_repair(emit)
+            elif what == "volumes":
+                nv.step_volumes(emit)
+            elif what == "reflect":
+                nv.step_reflect(emit)
             elif what == "chapter":
                 nv.step_chapter(n, emit)
             else:

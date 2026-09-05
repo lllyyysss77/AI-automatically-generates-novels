@@ -33,15 +33,20 @@ PROJECTS.mkdir(exist_ok=True)
 # 而自定的架空朝代"景朝"只有 2 次 —— 模型会稳定回落到训练数据里的真朝代。
 MODE_RULES = {
     "alt": ("【架空硬约束，违反即作废】\n"
-            "1. 第一行必须是：国号：X朝（一个两字虚构国号，不得以真朝代单字开头，"
-            "绝不许写成「大宋景朝」这种真假混写）\n"
-            "2. 另起一行：参考朝代（仅内部参考，正文永不出现）：北宋/唐/明…\n"
-            "3. 律法称「X律」、史书称「X史」，不得出现大宋、宋律、北宋等真实朝代词\n"
-            "4. 主场地点只指定一处，全书主线不换主场\n"
-            "5. 最后列「禁用词表」\n\n直接输出，无前言。"),
+            "开头两行必须严格照抄下面的格式，把 X 换成你定的名字，"
+            "括号里的说明文字不要抄进去：\n"
+            "```\n国号：燕朝\n参考朝代：北宋\n```\n"
+            "（国号是两字虚构名，不得以真朝代单字开头，不许写成「大宋景朝」这种真假混写；"
+            "参考朝代仅内部参考，正文永不出现）\n"
+            "其余要求：\n"
+            "- 律法称「X律」、史书称「X史」，不得出现大宋、宋律、北宋等真实朝代词\n"
+            "- 主场地点只指定一处，全书主线不换主场\n"
+            "- 最后列「禁用词表」\n\n"
+            "直接输出，无前言，不要复述本条要求。"),
     "real": ("【正统历史硬约束】\n"
              "1. 写的就是真实朝代，朝代名/官职/律法/纪年一律用真实名称，不要自造国号\n"
-             "2. 第一行写：朝代：X（具体到帝号与年号），第二行写：故事起始年份\n"
+             "2. 开头两行照格式写（说明文字不要抄）：\n```\n朝代：北宋 仁宗 庆历年间\n"
+             "起始年份：1043\n```\n"
              "3. 官职品级、俸禄、物价、度量衡必须真实；不确定的写模糊，不许编数字\n"
              "4. 主场地点只指定一处\n5. 最后列「易错点」\n\n直接输出，无前言。"),
     "none": ("【设定约束】\n1. 力量/规则体系必须自洽且可执行\n"
@@ -179,10 +184,17 @@ def call(profile: str, prompt: str, on_delta: Optional[Callable[[str], None]] = 
     return GenResult(text=out, reasoning=rsn, elapsed=time.time() - t0, chars=len(out))
 
 
+# 模型经常把提示词里的括号说明当模板抄进正文, 例如
+#   国号：燕朝（一个两字虚构国号，不得以真朝代单字开头…）
+_ECHO = re.compile(
+    r"（[^（）]{0,60}(?:不得|不许|禁止|仅内部参考|说明文字|不要抄|违反即作废)[^（）]{0,60}）")
+
+
 def clean(text: str) -> str:
-    """去掉模型爱加的前言/标题/代码围栏."""
+    """去掉模型爱加的前言/标题/代码围栏, 以及被复述的约束文字."""
     text = re.sub(r"^```[a-z]*\n|\n```$", "", text.strip())
     text = re.sub(r"^(?:好的|以下是|下面是)[^\n]{0,40}[:：]\s*\n+", "", text)
+    text = _ECHO.sub("", text)
     return text.strip()
 
 
@@ -274,6 +286,8 @@ class Novelist:
         bl = list(self.genre.get("clicheBlacklist", []))
         bl += self.style.get("banned", [])
         bl += self.cfg.get("banned_global", []) or []
+        from .evaluator import DEFAULT_TICS
+        bl += DEFAULT_TICS                    # 冷启动就设防, 不等统计攒够
         return list(dict.fromkeys([b for b in bl if b]))
 
     # ---------- 上下文 ----------
@@ -305,14 +319,32 @@ class Novelist:
                 self.p.mem, self.p.dir, era=era,
                 enable_web=bool(self.mcfg.get("web_search", True)),
                 summarize=lambda q: clean(call("polishing", q, max_tokens=800).text),
-                topics=self.genre.get("research_topics"))
+                topics=self.genre.get("research_topics"),
+                plan=lambda q: clean(call("planning", q, max_tokens=500).text))
         return self._retriever
 
-    def ground(self, stage: str, extra=None) -> str:
+    def sanitize_facts(self, text: str) -> str:
+        """架空模式下把参考资料里的真朝代名换成本书国号。
+
+        考据卡会进 L1 常驻层, 里面满篇"宋代"等于把真朝代名喂回给模型 ——
+        实测正文出现 28 次"宋律"就是这么来的。
+        """
+        if not text:
+            return text
+        a = self.world_anchor()
+        if a.get("mode") != "alt" or not a.get("dynasty"):
+            return text
+        dyn = a["dynasty"][:-1] if a["dynasty"].endswith("朝") else a["dynasty"]
+        for w in ("北宋", "南宋", "大宋", "宋朝", "宋代", "唐代", "唐朝", "明代",
+                  "明朝", "清代", "清朝", "汉代", "元代"):
+            text = text.replace(w, f"{dyn}朝")
+        return re.sub(r"《宋史[^》]*》|《宋[^》]{0,4}》", f"《{dyn}史》", text)
+
+    def ground(self, stage: str, extra=None, context: str = "") -> str:
         if not self.mcfg.get("web_search", True):
             return ""
         try:
-            return self.retriever.ground(stage, extra=extra)
+            return self.retriever.ground(stage, extra=extra, context=context)
         except Exception as e:
             print(f"[ground] 背景落地跳过: {e}")
             return ""
@@ -375,7 +407,37 @@ class Novelist:
         elif mode != "alt":
             anchor.pop("dynasty", None)
         anchor["forbidden"] = forbidden
+        if mode == "alt":
+            from .evaluator import REAL_PEOPLE
+            anchor["forbidden_people"] = REAL_PEOPLE
         return anchor
+
+    def protagonist_alias(self) -> str:
+        """主角本名与对外身份不一致时（穿越/重生/马甲/化名）必须钉死称谓规则。
+
+        实测: 花名册第一条是「林远」, 但书里对外身份是「西门庆」,
+        没有这条约束后文会两个名字乱用。
+        """
+        cards = self.roster()
+        if not cards:
+            return ""
+        head = cards[0]["card"]
+        m = re.search(r"姓名\s*[:：]\s*([^\n（(]{1,8})(?:[（(]\s*(?:原名|本名|真名)\s*[:：]?\s*([^）)]{1,8})[）)])?", head)
+        if not m:
+            return ""
+        outer, inner = m.group(1).strip(), (m.group(2) or "").strip()
+        title = self.p.meta.get("title", "")
+        if not inner:
+            # 书名里的名字与花名册首名不一致 -> 也按马甲处理
+            for cand in re.findall(r"[一-鿿]{2,3}", title):
+                if cand != outer and len(cand) >= 2 and cand in head:
+                    inner, outer = outer, cand
+                    break
+        if not inner or inner == outer:
+            return ""
+        return (f"【称谓锚定】主角对外身份是「{outer}」，本名/前世名是「{inner}」。"
+                f"叙述与他人称呼一律用「{outer}」；只有主角内心独白、"
+                f"或明确回忆前世时才可出现「{inner}」，且不得让旁人叫出这个名字。")
 
     # ---------- 角色花名册 ----------
     def roster(self) -> List[Dict[str, str]]:
@@ -488,7 +550,9 @@ class Novelist:
         if anchor.get("mode") == "alt" and anchor.get("dynasty"):
             cons.append(f"【朝代锚定·架空】本书朝代只叫「{anchor['dynasty']}」。"
                         f"绝对禁止出现真实朝代词：{'、'.join(anchor['forbidden'][:14])}。"
-                        f"律法称「{anchor['dynasty']}律」，史书称「{anchor['dynasty']}史」。")
+                        f"律法称「{anchor['dynasty']}律」，史书称「{anchor['dynasty']}史」。"
+                        f"也不得出现真实历史人物（赵构、蔡京、岳飞、苏轼…），"
+                        f"需要类似角色请用虚构姓名。")
         elif anchor.get("mode") == "real":
             cons.append("【史实锚定·正统历史】本书写的就是真实朝代，朝代名、官职、律法、"
                         "纪年一律用真实名称，不要自造国号。凡涉及具体年份、官职品级、"
@@ -496,6 +560,12 @@ class Novelist:
         if anchor.get("main_place"):
             cons.append(f"【主场锚定】主角常驻地是「{anchor['main_place']}」，"
                         f"不得随意把主场换到别的县城；确需异地必须写明行程。")
+        guide = self.p.read("style_guide.md")
+        if guide:
+            cons.append("【本书写作守则·自审沉淀】\n" + guide[:1200])
+        alias = self.protagonist_alias()
+        if alias:
+            cons.append(alias)
         tg = self.tic_guard()
         if tg:
             cons.append("【口癖抑制】" + tg)
@@ -506,8 +576,24 @@ class Novelist:
             cons.append("禁用套话：" + "、".join(bl))
         pend = self.p.mem.pending_foreshadow()
         if pend:
-            cons.append("未回收伏笔（可择机回收）：" + "；".join(
-                f"第{f['planted']}章「{f['text'][:40]}」" for f in pend[:5]))
+            old = [f for f in pend if n - f["planted"] >= 15]
+            cons.append("未回收伏笔：" + "；".join(
+                f"第{f['planted']}章「{f['text'][:36]}」" for f in pend[:6]))
+            if old:
+                cons.append(f"【伏笔告急】以下伏笔已埋了 15 章以上还没回收，"
+                            f"尽快找机会兑现：" + "；".join(f"「{f['text'][:30]}」" for f in old[:3]))
+
+        roles = self.p.state.get("roles", {})
+        if roles:
+            latest_roles = sorted(roles.items(), key=lambda kv: -kv[1].get("at", 0))[:8]
+            cons.append("【角色当前状态·不得凭空改变】" + "；".join(
+                f"{k}（第{v['at']}章）{v['state']}" for k, v in latest_roles))
+        tl = self.p.state.get("timeline", {})
+        if tl:
+            last = [f"第{k}章:{v}" for k, v in sorted(tl.items(), key=lambda x: int(x[0]))[-4:] if v]
+            if last:
+                cons.append("【时间线】" + "；".join(last)
+                            + "。本章必须明确交代距上一章过了多久，不得时间跳跃无说明。")
 
         out = mc.assemble(outline=chapter_outline, resident=resident, recent=recent,
                           mid=mid, recall=recall, constraints="\n".join(cons))
@@ -566,10 +652,11 @@ class Novelist:
             "朝代设定 / 地理与势力 / 政治军事经济 / 社会风貌与阶层 / 主角身份与金手指 / "
             "核心矛盾 / 力量或规则体系 / 关键道具与线索 / 禁用词表\n\n"
             + MODE_RULES[self.history_mode()], ctx)
-        bg = self.ground("world")
+        bg = self.sanitize_facts(
+            self.ground("world", context=ctx.get("premise", "") + "\n" + ctx.get("background", "")))
         if bg:
-            prompt += ("\n\n【真实背景资料 —— 世界观必须与之吻合，"
-                       "器物、官制、物价、风俗不得违背】\n" + bg[:6000])
+            prompt += ("\n\n【现实参考资料 —— 只用来保证器物、官制、物价、风俗合理，"
+                       "资料里的朝代名与专有名词一律不得出现在成稿里】\n" + bg[:6000])
         r = call("planning", prompt, on_delta, max_tokens=4000)
         wb = clean(r.text)
         self.p.write("world_bible.md", wb)
@@ -596,11 +683,14 @@ class Novelist:
             "4. 反派要有自洽逻辑，不能纯坏\n"
             "5. 若借用了知名作品的人物，其身份职业必须与原作一致，"
             "不得随意安排不符身份的官职\n"
+            "6. 【架空世界禁用真实历史人物】不得出现真实存在过的帝王将相文人"
+            "（如赵构、蔡京、岳飞、诸葛亮、魏征…）。需要类似角色时另起名字，"
+            "可保留原型气质但姓名必须虚构\n"
             "直接输出，无前言。", ctx)
-        bg = self.ground("cast")
+        bg = self.sanitize_facts(self.ground("cast", context=self.p.read("world_bible.md")[:3000]))
         if bg:
-            prompt += ("\n\n【真实背景资料 —— 姓名、称谓、职业、阶层、"
-                       "女性处境必须符合下列常识】\n" + bg[:5000])
+            prompt += ("\n\n【现实参考资料 —— 姓名、称谓、职业、阶层、女性处境"
+                       "须符合下列常识；资料里的朝代名不得出现在成稿里】\n" + bg[:5000])
         r = call("planning", prompt, on_delta, max_tokens=4000)
         ch = clean(r.text)
         self.p.write("characters.md", ch)
@@ -619,6 +709,52 @@ class Novelist:
         self.p.write("outline.md", ol)
         self._log(f"总纲 {len(ol)} 字 / {r.elapsed:.1f}s")
         return ol
+
+    def step_volumes(self, on_delta=None) -> List[Dict[str, Any]]:
+        """把全书拆成卷 —— 192 章直接从总纲跳到分章，中层节奏必然散。
+
+        每卷给出：卷名 / 起止章 / 本卷主线 / 本卷高潮 / 卷末钩子 / 本卷主要出场角色。
+        写分章细纲时只带所属卷的信息，而不是把整本总纲怼进去。
+        """
+        cached = self.p._load("volumes.json", None)
+        if cached:
+            return cached
+        total = self.p.meta.get("target_chapters", 0)
+        per = max(20, min(50, total // max(3, round(total / 40)) if total else 40))
+        n_vol = max(2, round(total / per)) if total else 4
+        anchor = self.world_anchor()
+        prompt = (
+            f"为《{self.p.meta.get('title','')}》做分卷。全书 {total} 章，分 {n_vol} 卷。\n\n"
+            f"#总纲\n{self.p.read('outline.md')[:4000]}\n\n"
+            f"#可用角色\n{'、'.join(c['name'] for c in self.roster()) or '未定'}\n\n"
+            f"#题材节奏要求\n{self.genre_rules()[:800]}\n\n"
+            + (f"#锚定\n朝代只叫「{anchor['dynasty']}」\n\n" if anchor.get("dynasty") else "")
+            + f"每卷严格按此格式，卷之间用一行 ###fenge 分隔：\n"
+              f"卷名：…\n章节范围：第X章-第Y章\n本卷主线：…\n"
+              f"本卷高潮：（具体事件）\n卷末钩子：…\n主要出场：（3-6 个角色名）\n"
+              f"实力/地位变化：（主角从什么状态到什么状态）\n\n"
+              f"要求：卷与卷之间要有明显的格局升级，不能原地打转。直接输出，无前言。")
+        r = call("planning", prompt, on_delta, max_tokens=4000)
+        vols: List[Dict[str, Any]] = []
+        cur = 1
+        for blk in [clean(x) for x in re.split(r"###fenge", r.text) if x.strip()]:
+            m = re.search(r"章节范围[^\d]*(\d+)\D+(\d+)", blk)
+            a, b = (int(m.group(1)), int(m.group(2))) if m else (cur, cur + per - 1)
+            name = (re.search(r"卷名\s*[:：]\s*(.+)", blk) or [None, f"第{len(vols)+1}卷"])[1]
+            vols.append({"index": len(vols) + 1, "name": str(name).strip()[:30],
+                         "start": a, "end": b, "text": blk})
+            cur = b + 1
+        if vols:
+            self.p.write("volumes.json", json.dumps(vols, ensure_ascii=False, indent=2))
+            self.p.mem.index_document("world", "volumes", r.text)
+        self._log(f"分卷 {len(vols)} 卷 / {r.elapsed:.1f}s")
+        return vols
+
+    def volume_of(self, n: int) -> Dict[str, Any]:
+        for v in (self.p._load("volumes.json", []) or []):
+            if v["start"] <= n <= v["end"]:
+                return v
+        return {}
 
     def step_chapter_outlines(self, start: int, count: int, on_delta=None) -> List[str]:
         """分批生成章节细纲, 每批 count 章 —— 一次性生成 200 章细纲必然崩."""
@@ -640,18 +776,28 @@ class Novelist:
             cons.append(f"主场固定在「{anchor['main_place']}」")
         cons.append("每章主角之外必须有 2 个以上配角有独立戏份")
         cons.append(self.genre_rules()[:800])
+        vol = self.volume_of(start)
+        if not vol:
+            self.step_volumes()
+            vol = self.volume_of(start)
+        outline_ctx = self.p.read("outline.md")[:1600]
+        if vol:
+            outline_ctx = (f"【本卷：{vol['name']}（第{vol['start']}-{vol['end']}章）】\n"
+                           f"{vol['text']}\n\n【全书总纲摘要】\n" + outline_ctx)
+            cons.append(f"本批章节属于「{vol['name']}」，必须服务于本卷主线与卷末钩子，"
+                        f"不得越出本卷进度")
         prompt = compile_outline_prompt(
             title=self.p.meta.get("title", ""), start=start, count=count,
             genre_line=f"{self.genre.get('name','')}/{self.style.get('name','')}".strip("/"),
             world_digest=self.p.read("world_bible.md")[:3000],
             roster_names=[c["name"] for c in self.roster()] or ["主角"],
-            outline=self.p.read("outline.md")[:3000],
+            outline=outline_ctx,
             prev_summary=self.prev_summary(start),
             constraints="\n".join(cons))
-        bg = self.ground("plot")
+        bg = self.sanitize_facts(self.ground("plot", context=self.p.read("outline.md")[:2500]))
         if bg:
-            prompt += ("\n\n【真实背景资料 —— 本批剧情涉及的器物、行程、"
-                       "礼俗必须符合下列常识，不要写出不属于该时代的东西】\n" + bg[:5000])
+            prompt += ("\n\n【现实参考资料 —— 本批剧情涉及的器物、行程、礼俗须符合下列常识；"
+                       "资料里的朝代名不得出现在成稿里】\n" + bg[:5000])
         r = call("planning", prompt, on_delta, max_tokens=8000)
         parts = [clean(x) for x in re.split(r"###fenge", r.text) if x.strip()]
         outlines = self.p._load("chapter_outlines.json", {})
@@ -741,11 +887,8 @@ class Novelist:
         self.p.write(self.p.chapter_path(n), text)
         self.p.write(f"audit/{n:03d}.json", json.dumps(a, ensure_ascii=False, indent=2))
 
-        # 滚动摘要
-        summ = call("polishing",
-                    f"用 60 字以内一句话概括这一章发生了什么，直接输出：\n\n{text[:3000]}",
-                    max_tokens=200)
-        one = clean(summ.text).replace("\n", " ")
+        # 结构化抽取: 摘要 + 伏笔 + 角色状态 + 时间推进 —— 合并成一次调用
+        one = self._extract_state(n, text)
         self.p.state.setdefault("summaries", {})[str(n)] = one
         if self.mcfg.get("index_chapters", True):
             self.p.mem.add("plot", f"ch{n}", f"第{n}章", one + "\n" + text[:1500])
@@ -777,8 +920,121 @@ class Novelist:
         every = self.mcfg.get("l2_every", 10)
         if n % every == 0:
             self._l2(n - every + 1, n)
+        ref = int(self.q.get("reflect_every", 5) or 0)
+        if ref and n % ref == 0:
+            try:
+                self.step_reflect()
+            except Exception as e:
+                self._log(f"自审失败(不阻塞写作): {e}")
         return {"chapter": n, "chars": a["stats"]["cn"], "score": a["score"],
                 "elapsed": r.elapsed, "rewritten": a.get("rewritten", False)}
+
+    # ---------------- 自我改进循环 ----------------
+    def step_reflect(self, on_delta=None, sample: int = 3) -> Dict[str, Any]:
+        """写几章就自己读一遍、批一遍，把结论沉淀成本书的写作守则。
+
+        单纯把审查分数打出来没用 —— 必须把"哪里不好、下次怎么写"变成
+        可执行的守则文本，注入后续每一章。这是全书质量能爬坡的唯一机制。
+        """
+        done = sorted(self.p.state.get("done", []))
+        if len(done) < 3:
+            return {"skipped": "章节太少"}
+
+        chs = {n: self.p.chapter(n) for n in done}
+        names = [c["name"] for c in self.roster()] or []
+        anchor = self.world_anchor()
+        ba = book_audit(chs, characters=names,
+                        forbidden_terms=anchor.get("forbidden"),
+                        forbidden_people=anchor.get("forbidden_people"),
+                        protagonist=names[0] if names else "")
+        wa = window_audit(chs, done[-1], span=3,
+                          outlines=self.p._load("chapter_outlines.json", {}))
+
+        # 抽样最近几章正文给 critic 读 —— 光看指标看不出"写得好不好"
+        picks = done[-sample:]
+        excerpt = "\n\n".join(
+            f"—— 第{n}章（节选）——\n{chs[n][:1800]}" for n in picks)
+
+        prev_guide = self.p.read("style_guide.md")
+        problems = json.dumps(ba.get("issues", []) + wa.get("issues", []),
+                              ensure_ascii=False)[:2500]
+
+        prompt = (
+            f"你是网文主编，正在审读《{self.p.meta.get('title','')}》。\n\n"
+            f"【机器体检结论】\n全书 {ba['score']}/100，近章窗口 {wa.get('score')}/100\n"
+            f"{problems}\n\n"
+            f"【最近 {len(picks)} 章正文节选】\n{excerpt}\n\n"
+            + (f"【上一版写作守则】\n{prev_guide[:1500]}\n\n" if prev_guide else "")
+            + "请输出**更新后的本书写作守则**，直接给后续章节的作者看。要求：\n"
+              "1. 只写可执行的具体指令，不要评价、不要鼓励、不要空话\n"
+              "2. 每条指令都要能被检查（写什么/不写什么/写多少）\n"
+              "3. 优先解决体检里的高危问题，并针对节选里读到的实际毛病补充\n"
+              "4. 保留上一版里仍然有效的条目，去掉已经解决的\n"
+              "5. 12 条以内，每条一行，以「-」开头\n"
+              "直接输出守则本身，无前言。")
+        r = call("judging", prompt, on_delta, max_tokens=1600)
+        guide = clean(r.text)
+        if guide:
+            self.p.write("style_guide.md", guide)
+            hist = self.p._load("reflect_log.json", [])
+            hist.append({"at_chapter": done[-1], "book_score": ba["score"],
+                         "window_score": wa.get("score"),
+                         "issues": [i["type"] for i in ba.get("issues", [])],
+                         "guide_chars": len(guide)})
+            self.p.write("reflect_log.json", json.dumps(hist, ensure_ascii=False, indent=2))
+        self._log(f"自审@第{done[-1]}章 全书{ba['score']} 窗口{wa.get('score')} "
+                  f"→ 守则 {len(guide)} 字")
+        return {"book": ba, "window": wa, "guide": guide}
+
+    def _extract_state(self, n: int, text: str) -> str:
+        """一次调用抽出: 本章摘要 / 新埋与回收的伏笔 / 角色状态变化 / 时间推进。
+
+        没有这层, 人物会瞬移、伤口会自愈、伏笔埋了永不回收、时间线会错乱 ——
+        这些都是单章读起来没问题、连起来一定崩的东西。
+        """
+        names = [c["name"] for c in self.roster()][:14]
+        prompt = (
+            f"读下面这一章，抽取结构化信息。已知角色：{'、'.join(names) or '未知'}\n\n"
+            f"严格按下面格式输出，没有内容的写「无」，不要任何多余文字：\n"
+            f"摘要：（60 字以内一句话概括本章发生了什么）\n"
+            f"时间：（本章相对上一章过了多久，如「当天下午」「三日后」）\n"
+            f"埋伏笔：（本章新埋下、尚未解释的线索，分号分隔，每条 20 字内）\n"
+            f"收伏笔：（本章解开了之前埋的哪些线索，分号分隔）\n"
+            f"角色状态：（格式 姓名=所在地/身体状态/关键持有物，分号分隔，只列本章出场的）\n\n"
+            f"{text[:4000]}")
+        r = call("polishing", prompt, max_tokens=600)
+        out = clean(r.text)
+
+        def field(k: str) -> str:
+            m = re.search(rf"^{k}\s*[:：]\s*(.*)$", out, re.M)
+            v = (m.group(1).strip() if m else "")
+            return "" if v in ("无", "None", "-") else v
+
+        summary = field("摘要") or out.splitlines()[0][:60]
+        st = self.p.state
+        st.setdefault("timeline", {})[str(n)] = field("时间")
+
+        for f in [x.strip() for x in re.split(r"[;；]", field("埋伏笔")) if len(x.strip()) > 3]:
+            self.p.mem.add_foreshadow(n, f[:60])
+        # 回收: 与未回收清单做模糊匹配
+        closed = [x.strip() for x in re.split(r"[;；]", field("收伏笔")) if len(x.strip()) > 3]
+        if closed:
+            pend = self.p.mem.pending_foreshadow()
+            for c in closed:
+                key = set(re.findall(r"[一-鿿]{2}", c))
+                for f in pend:
+                    if len(key & set(re.findall(r"[一-鿿]{2}", f["text"]))) >= 2:
+                        self.p.mem.resolve_foreshadow(f["id"], n)
+                        break
+
+        roles = st.setdefault("roles", {})
+        for item in [x.strip() for x in re.split(r"[;；]", field("角色状态")) if "=" in x]:
+            name, _, val = item.partition("=")
+            name = name.strip()
+            if name:
+                roles[name] = {"at": n, "state": val.strip()[:80]}
+        self.p.save()
+        return summary.replace("\n", " ")
 
     def _l2(self, a: int, b: int):
         sm = self.p.state.get("summaries", {})
