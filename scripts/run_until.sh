@@ -7,6 +7,16 @@ TITLE="${1:?书名}"; TARGET="${2:-0}"; BATCH="${3:-20}"
 SLUG=$(python3 -c "import sys;sys.path.insert(0,'.');from server.orchestrator import slugify;print(slugify('$TITLE'))")
 LOG="reports/longrun.log"; FAILS=0
 
+# 互斥：同一本书只允许一个长跑。并发两个会互相覆盖 state.json（踩过）。
+LOCK=".longrun.$(printf %s "$TITLE" | md5sum | cut -c1-8).lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "已有长跑在写《$TITLE》，本次退出；要重启请先 bash scripts/stop_run.sh" >&2
+  exit 1
+fi
+echo $$ > .longrun.pid
+trap 'rm -f .longrun.pid' EXIT
+
 count() { python3 -c "
 import json;print(len(json.load(open('projects/$SLUG/state.json',encoding='utf-8')).get('done',[])))" 2>/dev/null || echo 0; }
 target() { python3 -c "

@@ -28,3 +28,4 @@ tests/e2e/trace/
 .idea/
 .vscode/
 config/settings.local.yaml
+.longrun.*
