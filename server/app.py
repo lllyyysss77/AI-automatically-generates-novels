@@ -25,9 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from server.registry import registry, ROOT                       # noqa: E402
 from server.settings import load as load_settings, save as save_settings  # noqa: E402
 from server.orchestrator import (Project, Novelist, create_project,        # noqa: E402
-                                 slugify, call, PROJECTS)
+                                 slugify, call, clean, PROJECTS)
 from server.exporters import EXPORTERS, BINARY_EXPORTERS, MIME, EXT                 # noqa: E402
 from server.evaluator import audit, book_audit, window_audit
+from server.splitter import split_chapters, analyze, apply_to_project
                                 # noqa: E402
 
 WEB = ROOT / "web"
@@ -289,6 +290,39 @@ def context_report(slug: str, n: int):
     if not co:
         return jsonify({"error": f"第 {n} 章还没有细纲"}), 404
     return jsonify(Novelist(p).build_context(n, co)["report"])
+
+
+@app.post("/api/teardown")
+def teardown():
+    """拆书: 传入整本文本 -> 结构化素材; 带 slug 时直接落进该项目。"""
+    b = request.json or {}
+    text = b.get("text", "")
+    if len(text) < 500:
+        return jsonify({"error": "文本太短"}), 400
+    chs = split_chapters(text)
+
+    def stream():
+        try:
+            yield sse({"t": f"识别到 {len(chs)} 章，开始拆解…\n"})
+            box = []
+            res = analyze(chs, llm=lambda q: clean(call("judging", q, max_tokens=1200).text),
+                          sample=int(b.get("sample") or 8),
+                          on_progress=lambda m: box.append(m))
+            for m in box:
+                yield sse({"t": m})
+            yield sse({"t": "\n" + res["summary"]})
+            if b.get("slug"):
+                p = Project(b["slug"])
+                if p.meta:
+                    applied = apply_to_project(p, res)
+                    yield sse({"t": f"\n\n已写入项目：{json.dumps(applied, ensure_ascii=False)}"})
+            yield sse({"done": True})
+        except Exception as e:
+            traceback.print_exc()
+            yield sse({"error": str(e)})
+
+    return Response(stream(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/usage")
