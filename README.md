@@ -33,6 +33,35 @@
 
 ---
 
+## 界面
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/01-dashboard.png" alt="工作台"><br><sub><b>工作台</b> — 项目进度、字数、可用网关与插件包一览</sub></td>
+<td width="50%"><img src="docs/screenshots/03-dark.png" alt="暗色主题"><br><sub><b>暗色主题</b> — 跟随系统或手动切换，两套完整配色</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/11-new-project.png" alt="新建项目"><br><sub><b>新建项目</b> — 切换内容类型，层级链路与导出格式随之变化（短剧：剧集大纲 → 分集 → 分镜台本）</sub></td>
+<td><img src="docs/screenshots/04-packs.png" alt="插件包"><br><sub><b>插件包</b> — 4 种内容类型 / 21 个题材包 / 3 个文风包，点题材可看黑名单与常见坑</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/06-project-overview.png" alt="项目概览"><br><sub><b>项目概览</b> — 进度、AI 味均分、未回收伏笔、实时运行日志</sub></td>
+<td><img src="docs/screenshots/07-chapter.png" alt="章节"><br><sub><b>章节</b> — 正文可编辑，右上角实时显示字数与 AI 味评分</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/09-memory-layers.png" alt="分层记忆"><br><sub><b>分层记忆</b> — FTS5 检索召回 + 五层预算占用可视化，配比可调</sub></td>
+<td><img src="docs/screenshots/08-context-menu.png" alt="右键改写"><br><sub><b>右键改写</b> — 选中正文局部改写，v5.2 的 130 条题材指令全部保留</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/05-settings.png" alt="全局设置"><br><sub><b>全局设置</b> — 字数区间、质量闸、记忆配比、统一写作偏好</sub></td>
+<td><img src="docs/screenshots/10-export.png" alt="导出"><br><sub><b>导出</b> — 一份设定导出小说 / 大纲 / Fountain 剧本 / SRT 字幕</sub></td>
+</tr>
+</table>
+
+<p align="center"><img src="docs/screenshots/13-mobile.png" width="300" alt="窄屏"><br><sub>窄屏 420px 不破版</sub></p>
+
+---
+
 ## 五分钟跑起来
 
 ```bash

@@ -18,9 +18,10 @@ __pycache__/
 venv/
 .pytest_cache/
 
-# 测试产物
+# 测试产物（reports/ 忽略，但 docs/screenshots/ 里的展示图要进仓库）
 tests/e2e/screenshots/
 tests/e2e/trace/
+!docs/screenshots/
 
 # 编辑器
 .DS_Store
