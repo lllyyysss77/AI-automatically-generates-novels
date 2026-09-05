@@ -14,7 +14,7 @@ LOCAL = ROOT / "config" / "settings.local.yaml"   # UI 保存写这里, 只存�
 DEFAULTS: Dict[str, Any] = {
     "generation": {"chapter_words_min": 2200, "chapter_words_max": 3000,
                    "chapter_words_tolerance": 0.25, "outline_batch": 10,
-                   "max_tokens_draft": 8192, "max_tokens_plan": 8000,
+                   "max_tokens_draft": 8192, "max_tokens_plan": 8000, "critique_budget_chars": 46000,
                    "context_budget": "auto", "output_reserve": 8192,
                    "safety_margin": 4000,
                    "min_context_budget": 32000, "max_context_budget": 100000, "temperature_draft": 0.92,

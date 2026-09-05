@@ -22,6 +22,7 @@ from .evaluator import audit, book_audit, window_audit
 from .retrieval import Retriever
 from .prompt_compiler import (compile_chapter_prompt, compile_outline_prompt,
                                to_plot_list)
+from . import critic as critic_mod
 from .settings import load as load_settings
 from .memory import Memory
 from .memory_ctl import MemoryController
@@ -617,6 +618,11 @@ class Novelist:
         if anchor.get("main_place"):
             cons.append(f"【主场锚定】主角常驻地是「{anchor['main_place']}」，"
                         f"不得随意把主场换到别的县城；确需异地必须写明行程。")
+        cn = self.canon()
+        if cn:
+            recent_facts = cn[-40:]
+            cons.append("【已确立的不可逆事实，绝对不得推翻】\n" + "；".join(
+                f"{c['subject']}{c['fact']}(第{c['chapter']}章)" for c in recent_facts))
         guide = self.p.read("style_guide.md")
         if guide:
             cons.append("【本书写作守则·自审沉淀】\n" + guide[:1200])
@@ -1026,6 +1032,16 @@ class Novelist:
         if n not in self.p.state["done"]:
             self.p.state["done"].append(n)
         self.p.state["current"] = n
+        # 逐章评审: 让模型真读一遍
+        crit = {}
+        if self.q.get("critique_every_chapter", True):
+            try:
+                crit = self.step_critique(n, text)
+                a["critique"] = {k: crit.get(k) for k in
+                                 ("overall", "scores", "issues", "contradictions", "tics")}
+            except Exception as e:
+                self._log(f"评审失败(不阻塞写作): {e}")
+
         # 窗口体检: 本章 + 前 3 章贴在一起看
         done_now = sorted(set(self.p.state.get("done", [])) | {n})
         wchs = {i: self.p.chapter(i) for i in done_now[-8:]}
@@ -1035,8 +1051,11 @@ class Novelist:
         self.p.write(f"audit/{n:03d}.json", json.dumps(a, ensure_ascii=False, indent=2))
 
         rep = asm["report"]
+        if crit.get("overall") is not None:
+            a["score"] = min(a["score"], int(crit["overall"]))   # 取严
         rt = asm.get("retrieval") or {}
-        self._log(f"第{n}章 {a['stats']['cn']}字 单章{a['score']} 窗口{a['window']['score']} / {r.elapsed:.1f}s"
+        self._log(f"第{n}章 {a['stats']['cn']}字 单章{a['score']} "
+                  f"评审{crit.get('overall','-')} 窗口{a['window']['score']} / {r.elapsed:.1f}s"
                   + (f" / 召回 内{rt.get('internal',0)}+外{rt.get('external',0)}"
                      + (f"({'/'.join(rt.get('needs') or [])})" if rt.get("needs") else "")
                      if rt else "")
@@ -1145,6 +1164,54 @@ class Novelist:
                   f"窗口{wa.get('score')} "
                   f"→ 守则 {len(guide)} 字")
         return {"book": ba, "window": wa, "guide": guide}
+
+    # ---------------- 逐章评审 ----------------
+    def canon(self) -> List[Dict[str, Any]]:
+        return self.p._load("canon.json", [])
+
+    def step_critique(self, n: int, text: Optional[str] = None,
+                      on_delta=None) -> Dict[str, Any]:
+        """让模型真读这一章并打分, 同时抽出不可逆事实锁进 canon。
+
+        统计指标测不出「叙述拐杖」「官职凭空升级」「死了的人又活了」这类问题,
+        必须有人真读。上下文走索引 + 压缩, 64k 足够覆盖全书而不是只看四五章。
+        """
+        text = text if text is not None else self.p.chapter(n)
+        if not text:
+            return {"skipped": "没有正文"}
+        done = sorted(self.p.state.get("done", []))
+        prev = [self.p.chapter(i) for i in done if i < n][-1:]
+        digests = [f.read_text(encoding="utf-8")
+                   for f in sorted((self.p.dir / "l2_summary").glob("*.md"))]
+        try:
+            recalled = self.p.mem.search(text[:1500], k=20)
+        except Exception:
+            recalled = []
+        tl = self.p.state.get("timeline", {})
+        timeline = [f"第{k}章:{v}" for k, v in
+                    sorted(tl.items(), key=lambda x: int(x[0]))[-12:] if v]
+
+        budget = int(self.cfg["generation"].get("critique_budget_chars") or 46000)
+        prompt = critic_mod.build_prompt(
+            title=self.p.meta.get("title", ""), n=n, text=text, prev_texts=prev,
+            world=self.p.read("world_bible.md"), roster=self.p.read("characters.md"),
+            canon=self.canon(), outline=self.p._load("chapter_outlines.json", {}).get(str(n), ""),
+            budget_chars=budget, recalled=recalled, digests=digests,
+            roles=self.p.state.get("roles", {}), timeline=timeline)
+        r = call("judging", prompt, on_delta, max_tokens=2000)
+        d = critic_mod.parse(clean(r.text))
+        if not d:
+            return {"error": "评审未返回可解析结果"}
+
+        cn, added = critic_mod.merge_canon(self.canon(), d.get("new_facts"), n)
+        if added:
+            self.p.write("canon.json", json.dumps(cn, ensure_ascii=False, indent=2))
+        self.p.write(f"audit/{n:03d}.critique.json",
+                     json.dumps(d, ensure_ascii=False, indent=2))
+        self._log(f"评审第{n}章 {d.get('overall')}分 "
+                  f"问题{len(d.get('issues') or [])} 矛盾{len(d.get('contradictions') or [])} "
+                  f"新事实+{added} / {r.elapsed:.1f}s")
+        return d
 
     # ---------------- 章节重写 ----------------
     def rewrite_chapter(self, n: int, mode: str = "polish", note: str = "",
@@ -1342,6 +1409,11 @@ class Novelist:
                 per.append({"n": n, "score": a.get("score"),
                             "cn": (a.get("stats") or {}).get("cn"),
                             "issues": [i["type"] for i in a.get("issues", [])]})
+        cn = self.canon()
+        if cn:
+            recent_facts = cn[-40:]
+            cons.append("【已确立的不可逆事实，绝对不得推翻】\n" + "；".join(
+                f"{c['subject']}{c['fact']}(第{c['chapter']}章)" for c in recent_facts))
         guide = self.p.read("style_guide.md")
         rules = self.learned_rules()
         target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2

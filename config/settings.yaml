@@ -28,6 +28,10 @@ quality:
   hard_fail_on_blacklist: true   # 命中题材黑名单直接判不合格
   reflect_every: 5               # 每 N 章自审：读自己写的 → 批 → 更新写作守则，
                                  # 同时抽出机器可执行规则（禁用词/口癖/断线角色）自动生效
+  critique_every_chapter: true   # 每章都让模型真读一遍并打分（统计指标测不出
+                                 # 叙述拐杖/官职凭空升级/死了的人又活了这类问题）
+  critique_budget_chars: 46000   # 评审上下文预算（约 64k token）。走索引与压缩，
+                                 # 灌原文只装得下四五章，走 canon+摘要+召回能覆盖全书
   selfcheck_every: 20            # 每 N 章系统级自检：区分内容问题与系统缺陷
                                  # （漏检/误报/约束失效/配额错误），产出 SYSTEM_ISSUES.md
 
