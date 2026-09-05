@@ -94,10 +94,10 @@ AI 写小说是**能力**，不是**产品**。任何人打开 ChatGPT 都能让
 
 | 通路 | 模型 | 思考字段名 | 正文字段 | 首字 | 备注 |
 |---|---|---|---|---|---|
-| **gether 网关**<br>`https://aigc.gether.net/v1` | `qwen3.8-max` | `reasoning_content` | `content` | 3.1s | **115 个模型同一入口** |
+| **gether 网关**<br>`${NOVEL_GW3_URL}` | `qwen3.8-max` | `reasoning_content` | `content` | 3.1s | **115 个模型同一入口** |
 | 同上 | `qwen3.8-flash` | `reasoning_content` | `content` | 2.7s | 便宜快 |
 | 同上 | `qwen3.7-max` | `reasoning_content` | `content` | 15.7s | 思考极重 |
-| **自建 vLLM**<br>`http://115.231.27.247:8000/v1` | `Qwen3.6-35B` | **`reasoning`** ← 非标准 | `content` | **0.4s** | 私有/低延迟/免费 |
+| **自建 vLLM**<br>`${NOVEL_GW2_URL}` | `Qwen3.6-35B` | **`reasoning`** ← 非标准 | `content` | **0.4s** | 私有/低延迟/免费 |
 
 三种命名：`content` / `reasoning_content`（DeepSeek 系约定）/ `reasoning`（vLLM 自定义）。
 更糟的是 Qwen3.6-35B 在某些 prompt 下**把答案整个放进 `reasoning` 并包在 `<answer>` 里，`content` 全空**（已复现）。
@@ -228,13 +228,13 @@ class QwenVLLMProvider(BaseProvider):
 gateways:
   gether:                                    # 一个网关 = 115 个模型
     type: openai_compat
-    base_url: https://aigc.gether.net/v1
-    api_key: ${GETHER_API_KEY}               # 走 .env，不进代码
+    base_url: ${NOVEL_GW3_URL}
+    api_key: ${NOVEL_GW3_KEY}               # 走 .env，不进代码
     reasoning_field: reasoning_content
   local_vllm:
     type: openai_compat
-    base_url: http://115.231.27.247:8000/v1
-    api_key: ${VLLM_API_KEY}
+    base_url: ${NOVEL_GW2_URL}
+    api_key: ${NOVEL_GW2_KEY}
     reasoning_field: reasoning               # ★ 非标准命名在这里声明
 
 profiles:                                    # 任务 → 模型 的映射，用户可改
