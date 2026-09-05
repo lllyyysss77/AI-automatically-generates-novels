@@ -1,8 +1,11 @@
 """导出插件. 加一种格式 = 加一个函数 + 注册一行."""
 from __future__ import annotations
 
+import html
+import io
 import re
-from typing import Dict, Callable, List, Any
+import zipfile
+from typing import Dict, Callable, List, Any, Tuple
 
 
 def _chapters(project) -> List[tuple]:
@@ -90,10 +93,130 @@ def to_srt(project) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------- 二进制格式
+# docx / epub 都是 zip + XML, 手写即可, 不必为此引入依赖。
+
+def _xml_escape(t: str) -> str:
+    return html.escape(t, quote=False)
+
+
+def to_docx(project) -> bytes:
+    """最小可用 .docx —— Word / WPS / Pages 都能正常打开。"""
+    def para(text: str, style: str = "") -> str:
+        pr = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
+        return (f'<w:p>{pr}<w:r><w:rPr><w:rFonts w:eastAsia="SimSun"/>'
+                f'<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">'
+                f'{_xml_escape(text)}</w:t></w:r></w:p>')
+
+    body = [para(f"《{project.meta.get('title','')}》", "Title")]
+    for n, title, text in _chapters(project):
+        body.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
+        body.append(para(f"第{n}章 {title}", "Heading1"))
+        for line in text.split("\n"):
+            if line.strip():
+                body.append(para(line.strip()))
+
+    document = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f'<w:body>{"".join(body)}</w:body></w:document>')
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '</Types>')
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '</Relationships>')
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("word/document.xml", document)
+    return buf.getvalue()
+
+
+def to_epub(project) -> bytes:
+    """最小可用 .epub 2.0 —— 微信读书 / Apple Books / Calibre 可读。"""
+    title = project.meta.get("title", "novel")
+    uid = f"urn:uuid:novel-{abs(hash(title)) & 0xffffffff:08x}"
+    chs: List[Tuple[int, str, str]] = _chapters(project)
+
+    def xhtml(head: str, body_html: str) -> str:
+        return ('<?xml version="1.0" encoding="utf-8"?>'
+                '<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml">'
+                f'<head><title>{_xml_escape(head)}</title>'
+                '<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>'
+                '<style>body{font-family:serif;line-height:1.9;margin:1em}'
+                'h1{font-size:1.3em;margin:1.2em 0}p{text-indent:2em;margin:.5em 0}</style>'
+                f'</head><body>{body_html}</body></html>')
+
+    files: Dict[str, str] = {}
+    for n, ct, text in chs:
+        ps = "".join(f"<p>{_xml_escape(l.strip())}</p>"
+                     for l in text.split("\n") if l.strip())
+        files[f"ch{n:04d}.xhtml"] = xhtml(f"第{n}章 {ct}",
+                                          f"<h1>第{n}章 {_xml_escape(ct)}</h1>{ps}")
+
+    manifest = "".join(
+        f'<item id="c{n:04d}" href="{f}" media-type="application/xhtml+xml"/>'
+        for (n, _, _), f in zip(chs, files))
+    spine = "".join(f'<itemref idref="c{n:04d}"/>' for n, _, _ in chs)
+    opf = ('<?xml version="1.0" encoding="utf-8"?>'
+           '<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">'
+           '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" '
+           'xmlns:opf="http://www.idpf.org/2007/opf">'
+           f'<dc:title>{_xml_escape(title)}</dc:title>'
+           '<dc:language>zh-CN</dc:language>'
+           f'<dc:identifier id="bookid">{uid}</dc:identifier>'
+           '<dc:creator>AI Novel Studio</dc:creator></metadata>'
+           f'<manifest>{manifest}'
+           '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>'
+           f'<spine toc="ncx">{spine}</spine></package>')
+    navpoints = "".join(
+        f'<navPoint id="n{n:04d}" playOrder="{i+1}"><navLabel><text>'
+        f'第{n}章 {_xml_escape(ct)}</text></navLabel>'
+        f'<content src="ch{n:04d}.xhtml"/></navPoint>'
+        for i, (n, ct, _) in enumerate(chs))
+    ncx = ('<?xml version="1.0" encoding="utf-8"?>'
+           '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+           f'<head><meta name="dtb:uid" content="{uid}"/></head>'
+           f'<docTitle><text>{_xml_escape(title)}</text></docTitle>'
+           f'<navMap>{navpoints}</navMap></ncx>')
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        # mimetype 必须是第一个且不压缩
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip",
+                   compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml",
+                   '<?xml version="1.0"?>'
+                   '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                   '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+                   'media-type="application/oebps-package+xml"/></rootfiles></container>')
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/toc.ncx", ncx)
+        for f, c in files.items():
+            z.writestr(f"OEBPS/{f}", c)
+    return buf.getvalue()
+
+
+BINARY_EXPORTERS: Dict[str, Callable[[Any], bytes]] = {
+    "docx": to_docx, "epub": to_epub,
+}
+
 EXPORTERS: Dict[str, Callable[[Any], str]] = {
     "txt": to_txt, "md": to_md, "outline": to_outline,
     "fountain": to_fountain, "srt": to_srt,
 }
 MIME = {"txt": "text/plain", "md": "text/markdown", "outline": "text/plain",
-        "fountain": "text/plain", "srt": "application/x-subrip"}
-EXT = {"txt": "txt", "md": "md", "outline": "txt", "fountain": "fountain", "srt": "srt"}
+        "fountain": "text/plain", "srt": "application/x-subrip",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "epub": "application/epub+zip"}
+EXT = {"txt": "txt", "md": "md", "outline": "txt", "fountain": "fountain", "srt": "srt",
+       "docx": "docx", "epub": "epub"}

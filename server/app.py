@@ -24,7 +24,7 @@ from server.registry import registry, ROOT                       # noqa: E402
 from server.settings import load as load_settings, save as save_settings  # noqa: E402
 from server.orchestrator import (Project, Novelist, create_project,        # noqa: E402
                                  slugify, call, PROJECTS)
-from server.exporters import EXPORTERS, MIME, EXT                 # noqa: E402
+from server.exporters import EXPORTERS, BINARY_EXPORTERS, MIME, EXT                 # noqa: E402
 from server.evaluator import audit, book_audit, window_audit
                                 # noqa: E402
 
@@ -300,12 +300,16 @@ def anchor_api(slug: str):
 def export(slug: str):
     p = Project(slug)
     fmt = request.args.get("fmt", "txt")
-    if fmt not in EXPORTERS:
+    if fmt in BINARY_EXPORTERS:
+        body = BINARY_EXPORTERS[fmt](p)          # bytes
+    elif fmt in EXPORTERS:
+        body = EXPORTERS[fmt](p)                 # str
+    else:
         return jsonify({"error": f"不支持的格式 {fmt}"}), 400
-    body = EXPORTERS[fmt](p)
     name = f"{p.meta.get('title', 'novel')}.{EXT[fmt]}"
     # 中文文件名必须按 RFC 5987 百分号编码, 否则 WSGI 写 header 时 latin-1 编码失败
-    return Response(body, mimetype=MIME[fmt] + "; charset=utf-8", headers={
+    mime = MIME[fmt] + ("" if fmt in BINARY_EXPORTERS else "; charset=utf-8")
+    return Response(body, mimetype=mime, headers={
         "Content-Disposition": "attachment; filename=\"export.%s\"; filename*=UTF-8''%s"
                                % (EXT[fmt], quote(name, safe=""))})
 
