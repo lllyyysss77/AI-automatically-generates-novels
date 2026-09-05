@@ -638,9 +638,17 @@ class Novelist:
         cons.append("【配角配额】本章除主角外至少让 2 个配角有独立台词与动作，"
                     "配角不能只当背景板；不得给已知人物随意安排与其身份不符的官职。")
         bl = self.blacklist()
-        if bl:
-            cons.append("禁用套话（含任何变体，如禁「冷笑一声」则「冷笑」「冷笑道」"
-                        "「嗤笑一声」同样禁止）：" + "、".join(bl))
+        # 两类区别对待: 穿帮词是硬禁, 用滥的表达是限频 —— 一律硬禁会误伤正常写作
+        hard = [w for w in bl if w in set(REAL_DYNASTIES) | set(
+            self.learned_rules().get("forbidden_terms", [])[:0] or [])]
+        anchor_forb = set(anchor.get("forbidden") or [])
+        hard = [w for w in bl if w in anchor_forb]
+        soft = [w for w in bl if w not in anchor_forb]
+        if hard:
+            cons.append("【绝不能出现】" + "、".join(hard[:20]))
+        if soft:
+            cons.append("【已被用滥的表达，本章最多出现 1 次，含变体】"
+                        + "、".join(soft[:24]))
         pend = self.p.mem.pending_foreshadow()
         if pend:
             old = [f for f in pend if n - f["planted"] >= 15]
@@ -861,9 +869,32 @@ class Novelist:
             outline=outline_ctx,
             prev_summary=self.prev_summary(start),
             constraints="\n".join(cons),
+            used_titles=[m.group(1).strip()[:20] for m in
+                         (re.search(r"第\s*\d+\s*章\s*(.+)", v)
+                          for v in self.p._load("chapter_outlines.json", {}).values())
+                         if m],
             plots_per_chapter=max(3, int(
                 (self.g["chapter_words_min"] + self.g["chapter_words_max"]) / 2
                 / (int(self.style.get("blockWords") or 500) * 0.8))))
+        # 细纲生成之前也要召回已确立的事实 —— 否则会写出自相矛盾的剧情。
+        # 实测: 第 25 章把玉佩指向皇子赵琰, 第 33 章又说是东平府通判赵家之物,
+        # 因为细纲生成压根没接记忆层, 模型看不到前面已经定死的结论。
+        seed = self.p.read("outline.md")[:1200] + "\n" + self.prev_summary(start, k=6)
+        established = ""
+        try:
+            hits = self.p.mem.search(seed, k=8)
+            if hits:
+                established = "\n".join(
+                    f"- {h['title']}：{h['text'][:220]}" for h in hits)
+        except Exception as e:
+            print(f"[outline] 事实召回跳过: {e}")
+        pend = self.p.mem.pending_foreshadow()
+        if pend:
+            established += "\n【未回收伏笔，本批可择机兑现】" + "；".join(
+                f"第{f['planted']}章「{f['text'][:36]}」" for f in pend[:8])
+        if established:
+            cons.append("【已确立的事实，不得推翻或给出不同结论】\n" + established[:2500])
+
         bg = self.sanitize_facts(self.ground("plot", context=self.p.read("outline.md")[:2500]))
         if bg:
             prompt += ("\n\n【现实参考资料 —— 本批剧情涉及的器物、行程、礼俗须符合下列常识；"
@@ -1347,39 +1378,75 @@ class Novelist:
         self._log(f"系统自检@第{done[-1]}章 → {len(found)} 条系统级问题")
         return {"issues": found, "book_score": ba["score"]}
 
-    # 自审抽出的规则必须过守门 —— 实测模型把角色名「蔡知县」、条件描述
-    # 「蔡知县（作为地点）」、带占位符的「武松离开的第X天」、甚至检测器的内部
-    # 标签「脸色X白」全塞进了禁用词表，结果一个正常配角被判 45 次违规，
-    # 全书分数被永久钉死，而且这条禁令还注入提示词让模型不敢写他。
-    _RULE_REJECT = re.compile(
-        r"[（(].*?[）)]"                          # 带括号的条件说明
+    # 规则守门 —— 判断交给模型，正则只做廉价预筛。
+    # 之前用一堆正则启发式（拟声词/感官名词/词频…），结果先误杀「脸色铁青」这种
+    # 真套话，又漏掉「蔡知县」这种角色称呼，来回调都调不准。这类判断本就需要
+    # 理解上下文，应该让模型做。
+    _CHEAP_REJECT = re.compile(
+        r"[（(].*?[）)]"                                # 带括号的条件说明
         r"|作为|用作|无铺垫|不得|禁止|应当|时候|场景|之类|等等"  # 描述句而非词条
-        r"|[A-Za-z]"                              # 含占位符 X/N 或英文
+        r"|[A-Za-z]"                                    # 占位符 X/N 或英文
         r"|^\W*$")
 
-    def _valid_rule(self, w: str, roster_names: set,
-                    corpus: Optional[Dict[int, str]] = None) -> tuple:
-        """返回 (是否可作为机器禁用词, 拒绝原因)。
+    def _cheap_ok(self, w: str) -> bool:
+        return bool(w) and 2 <= len(w) <= 12 and not self._CHEAP_REJECT.search(w)
 
-        最硬的一条判据是最后那个: **在已写正文里高频且广泛分布的词不能无条件禁用**。
-        角色的职务称呼（「蔡知县」，而花名册里登记的是「蔡德茂」）光靠对名单拦不住,
-        但它必然高频且遍布全书 —— 禁掉等于让模型不敢写这个角色。
+    def gate_rules(self, cands: List[str]) -> Dict[str, List[str]]:
+        """让模型判定每个候选词该硬禁、该限频、还是该丢弃。
+
+        返回 {"hard": [...], "soft": [...], "drop": [{"w":…, "why":…}]}
+          hard 穿帮词（真朝代名/现代词/真实历史人物）—— 出现即违规
+          soft 被用滥的套话 —— 限频，超密度才扣分
+          drop 角色称呼 / 剧情道具 / 正常描写 —— 禁掉会误伤，不进规则
         """
-        w = (w or "").strip()
-        if not (2 <= len(w) <= 12):
-            return False, "长度不合理"
-        if w in roster_names:
-            return False, "是本书角色名"
-        if any(w in n or n in w for n in roster_names if len(n) >= 3):
-            return False, "与角色名重叠"
-        if self._RULE_REJECT.search(w):
-            return False, "含条件说明或占位符，不是可字面匹配的词"
-        if corpus:
-            hit = [n for n, t in corpus.items() if w in t]
-            if len(hit) >= max(4, len(corpus) * 0.3):
-                return False, (f"在 {len(hit)}/{len(corpus)} 章都出现，"
-                               f"是本书常用语或角色称呼，不宜无条件禁用")
-        return True, ""
+        cands = [w.strip() for w in cands if w and w.strip()]
+        pre_drop = [{"w": w, "why": "格式不合（含条件说明/占位符/长度异常）"}
+                    for w in cands if not self._cheap_ok(w)]
+        rest = [w for w in cands if self._cheap_ok(w)]
+        if not rest:
+            return {"hard": [], "soft": [], "drop": pre_drop}
+
+        roster = "、".join(c["name"] for c in self.roster()) or "（未知）"
+        done = sorted(self.p.state.get("done", []))
+        sample = "\n".join(self.p.chapter(n)[:700] for n in done[-2:])
+        anchor = self.world_anchor()
+        prompt = (
+            f"你在给一套 AI 写作系统做「禁用词守门」。下面是候选词，"
+            f"请判断每个词该怎么处理。\n\n"
+            f"【本书】《{self.p.meta.get('title','')}》"
+            f"{'（架空世界，国号「'+anchor['dynasty']+'」）' if anchor.get('dynasty') else ''}\n"
+            f"【出场角色】{roster}\n"
+            f"【近两章正文节选】\n{sample[:2500]}\n\n"
+            f"【候选词】{'、'.join(rest)}\n\n"
+            f"分三类：\n"
+            f"hard = 穿帮词，出现即错。真实朝代名、现代词汇、真实历史人物名、"
+            f"与本书设定冲突的词。\n"
+            f"soft = 被用滥的套话或固定搭配（如「脸色铁青」「目光如刀」），"
+            f"偶尔用没问题、频繁用才是毛病，应当限频。\n"
+            f"drop = **禁掉会误伤正常写作**的：角色的姓名/职务称呼/别号、"
+            f"本书的剧情道具与专有名词、拟声词、必要的感官描写。\n\n"
+            f"只输出 JSON（不要代码围栏）：\n"
+            f'{{"hard":["…"],"soft":["…"],"drop":[{{"w":"…","why":"一句话理由"}}]}}\n'
+            f"每个候选词必须且只能出现在一类里。拿不准就归 drop —— "
+            f"误禁一个角色名的代价远大于漏禁一个套话。")
+        try:
+            r = call("judging", prompt, max_tokens=1200)
+            m = re.search(r"\{.*\}", clean(r.text), re.S)
+            d = json.loads(m.group(0)) if m else {}
+        except Exception as e:
+            print(f"[gate] 模型判定失败, 全部保守丢弃: {e}")
+            return {"hard": [], "soft": [],
+                    "drop": pre_drop + [{"w": w, "why": "守门模型不可用"} for w in rest]}
+
+        hard = [w for w in (d.get("hard") or []) if w in rest]
+        soft = [w for w in (d.get("soft") or []) if w in rest and w not in hard]
+        judged = set(hard) | set(soft)
+        drop = pre_drop + [x if isinstance(x, dict) else {"w": x, "why": ""}
+                           for x in (d.get("drop") or [])]
+        drop += [{"w": w, "why": "模型未归类，保守丢弃"}
+                 for w in rest if w not in judged
+                 and w not in {x.get("w") for x in drop if isinstance(x, dict)}]
+        return {"hard": hard, "soft": soft, "drop": drop}
 
     def _merge_rules(self, raw: str) -> Dict[str, Any]:
         """把自审抽出的结构化规则并进 rules.json —— 让模型的发现变成机器强制。
@@ -1396,31 +1463,55 @@ class Novelist:
         except Exception:
             return {}
         cur = self.p._load("rules.json", {})
-        roster_names = {c["name"] for c in self.roster()}
-        corpus = {n: self.p.chapter(n) for n in sorted(self.p.state.get("done", []))[-30:]}
-        changed, rejected = {}, []
-        for k in ("forbidden_terms", "tics", "must_appear", "drop_roles"):
-            add = [str(x).strip() for x in (new.get(k) or []) if str(x).strip()][:8]
-            if k in ("forbidden_terms", "tics"):      # 只有禁用类需要守门
-                ok = []
-                for w in add:
-                    good, why = self._valid_rule(w, roster_names, corpus)
-                    (ok if good else rejected).append(w if good else f"{w}（{why}）")
-                add = ok
+        changed = {}
+        # 禁用类候选统一交给模型守门, 分成硬禁与限频两档
+        cands = [str(x).strip() for k in ("forbidden_terms", "tics")
+                 for x in (new.get(k) or []) if str(x).strip()][:16]
+        g = self.gate_rules(cands) if cands else {"hard": [], "soft": [], "drop": []}
+        for k, add in (("forbidden_terms", g["hard"]), ("tics", g["soft"])):
             old = cur.get(k, [])
             merged = list(dict.fromkeys(old + add))[:40]
             if merged != old:
                 changed[k] = [x for x in add if x not in old]
             cur[k] = merged
-        if rejected:
-            self._log("规则守门拦下: " + "；".join(rejected[:5]))
+        for k in ("must_appear", "drop_roles"):
+            add = [str(x).strip() for x in (new.get(k) or []) if str(x).strip()][:8]
+            old = cur.get(k, [])
+            merged = list(dict.fromkeys(old + add))[:40]
+            if merged != old:
+                changed[k] = [x for x in add if x not in old]
+            cur[k] = merged
+        if g["drop"]:
+            self._log("守门丢弃: " + "；".join(
+                f"{x.get('w')}（{x.get('why','')[:20]}）" for x in g["drop"][:5]))
         if changed:
             self.p.write("rules.json", json.dumps(cur, ensure_ascii=False, indent=2))
             self._log("自审新增机器规则: " + json.dumps(changed, ensure_ascii=False))
         return changed
 
     def learned_rules(self) -> Dict[str, Any]:
-        return self.p._load("rules.json", {})
+        """读取时二次校验 —— 只在写入时把关不够。
+
+        实测: 加了守门器却没重启长跑, 旧进程照样把「蔡德茂」(出场 496 次的核心
+        配角) 写进禁用词表, 于是提示词里赫然写着「禁用: 蔡德茂」。
+        规则是外部数据, 每次使用前都要验, 不能信任落盘内容。
+        """
+        cur = self.p._load("rules.json", {})
+        if not cur:
+            return cur
+        # 读取时只做零成本的格式预筛（模型守门在写入时已做过语义判断）,
+        # 防止旧版本进程或手改文件塞进畸形条目
+        names = {c["name"] for c in self.roster()}
+        dirty = False
+        for k in ("forbidden_terms", "tics"):
+            ok = [w for w in cur.get(k, [])
+                  if self._cheap_ok(w) and w not in names]
+            if len(ok) != len(cur.get(k, [])):
+                dirty = True
+            cur[k] = ok
+        if dirty:
+            self.p.write("rules.json", json.dumps(cur, ensure_ascii=False, indent=2))
+        return cur
 
     def _l2(self, a: int, b: int):
         sm = self.p.state.get("summaries", {})

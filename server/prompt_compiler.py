@@ -149,14 +149,19 @@ def compile_outline_prompt(*, title: str, start: int, count: int,
                            genre_line: str, world_digest: str,
                            roster_names: List[str], outline: str,
                            prev_summary: str, constraints: str,
-                           plots_per_chapter: int = 6) -> str:
+                           plots_per_chapter: int = 6,
+                           used_titles: Optional[List[str]] = None) -> str:
     """编译分章细纲提示词 —— 输出编号剧情清单，而不是散文。"""
+    # 先算好可选段落再拼；直接在 f-string 序列里插 `+ (...)` 会打断隐式拼接
+    used_block = (f"#已用过的章节名（本批一律不得重复，也不得只改一两个字）\n"
+                  f"{'、'.join(used_titles[-60:])}\n\n") if used_titles else ""
     return (
         f"你是{genre_line}的网文策划。为《{title}》写第 {start}-{start+count-1} 章的细纲。\n\n"
         f"#总纲\n{outline}\n\n"
         f"#世界观速览\n{world_digest}\n\n"
         f"#可用角色（只能从中挑，不得凭空造人）\n{'、'.join(roster_names)}\n\n"
         f"#前情\n{prev_summary}\n\n"
+        f"{used_block}"
         f"#必守约束\n{constraints}\n\n"
         f"每章严格按下面格式输出，章与章之间用一行 ###fenge 分隔：\n\n"
         f"第N章 章节名\n"
