@@ -231,7 +231,10 @@ def book_audit(chapters: Dict[int, str], *, characters: List[str] | None = None,
                            "detail": f"档案里有但正文从未出现: {'、'.join(never[:10])}"})
 
     # 4 地名/主场漂移
-    places = Counter(re.findall(r"([一-鿿]{2}(?:县|州|府|镇|村))", allt))
+    # 只统计行政区; 「西门府/王府」这类宅邸不算主场, 否则必然误报漂移
+    places = Counter(w for w in re.findall(r"([一-鿿]{2}(?:县|州|府|镇|村|城))", allt)
+                     if not re.search(r"(?:府|宅|邸)$", w) or w.endswith(("州府", "京府"))
+                     or w[-1] in "县镇村城")
     main = places.most_common(3)
     if len(main) >= 2 and main[1][1] > main[0][1] * 0.4:
         issues.append({"level": "mid", "type": "主场地点漂移",

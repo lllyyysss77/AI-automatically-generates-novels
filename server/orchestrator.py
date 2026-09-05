@@ -500,6 +500,13 @@ class Novelist:
                 continue
             cards.append({"name": name, "card": blk[:700]})
         if cards:
+            # 花名册首条用「对外身份」做名字, 否则模型会把本名当主名来写
+            m = re.search(r"姓名\s*[:：]\s*([^\n（(]{1,8})[（(]\s*([^）)]{1,8})[）)]",
+                          cards[0]["card"])
+            if m:
+                a, b = m.group(1).strip(), m.group(2).strip()
+                title = self.p.meta.get("title", "")
+                cards[0]["name"] = b if (b in title and a not in title) else a
             self.p.write("roster.json", json.dumps(cards, ensure_ascii=False, indent=2))
         return cards
 
@@ -883,7 +890,9 @@ class Novelist:
             manner=st.get("manner") or "口语化，节奏明快",
             background=f.get("background", ""),
             world_digest=L["L1_resident"][:4000],
-            roster=rost, protagonist=(rost[0]["name"] if rost else ""),
+            alias_rule=self.protagonist_alias(),
+            roster=rost, protagonist=((self.alias_pair() or [None])[0]
+                                      or (rost[0]["name"] if rost else "")),
             relations=f.get("relationships", ""),
             mainline=self.p.read("outline.md")[:1500],
             chapter_outline=co,

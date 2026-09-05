@@ -62,6 +62,8 @@ def cast_block(roster: List[Dict[str, str]], chapter_outline: str,
         present = bool(name and name in chapter_outline) or name == protagonist
         mark = "" if present else "[本章未出现]"
         lines.append(f"{mark}{name}：{digest}")
+    if protagonist:
+        lines.insert(0, f"（主角是「{protagonist}」，全文一律这样称呼）")
     return "\n".join(lines)
 
 
@@ -78,7 +80,7 @@ def _digest(card: str, limit: int = 150) -> str:
 
 
 def compile_chapter_prompt(*, title: str, index: int, target_words: int,
-                           genre_line: str, manner: str,
+                           genre_line: str, manner: str, alias_rule: str = "",
                            background: str, world_digest: str,
                            roster: List[Dict[str, str]], protagonist: str,
                            relations: str, mainline: str,
@@ -107,6 +109,10 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
         f"合计 {target_words} 字（可上下浮动 15%，绝不许超过 {int(target_words*1.3)} 字）。"
         f"每写满 {block_words} 字换一个大段落，段首标【字数标记xx字】（xx 为累计字数）。"
         f"写完第 {blocks} 块立刻收尾留钩子，不要再展开新情节。")
+    # 称谓规则必须放在最前面 —— 埋进「必守约束」里模型基本不看,
+    # 实测第 11 章「西门庆」0 次而「林远」25 次。
+    if alias_rule:
+        seg.append("\n⚠️ " + alias_rule)
 
     if genre_line:
         seg.append(f"\n#小说类型：{genre_line}")
