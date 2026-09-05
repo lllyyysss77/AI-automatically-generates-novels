@@ -1,0 +1,6 @@
+interface:
+  display_name: "AI Automatically Generates Novels"
+  short_description: "Repo-specific patterns and workflows for AI-automatically-generates-novels"
+  default_prompt: "Use the AI-automatically-generates-novels repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
