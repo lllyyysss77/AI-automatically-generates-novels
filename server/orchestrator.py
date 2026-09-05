@@ -322,6 +322,8 @@ class Novelist:
         bl += self.cfg.get("banned_global", []) or []
         from .evaluator import DEFAULT_TICS
         bl += DEFAULT_TICS                    # 冷启动就设防, 不等统计攒够
+        lr = self.learned_rules()             # 自审学到的规则, 自动生效
+        bl += lr.get("forbidden_terms", []) + lr.get("tics", [])
         return list(dict.fromkeys([b for b in bl if b]))
 
     # ---------- 上下文 ----------
@@ -440,7 +442,8 @@ class Novelist:
             forbidden += [w for w in REAL_DYNASTIES if w not in forbidden]
         elif mode != "alt":
             anchor.pop("dynasty", None)
-        anchor["forbidden"] = forbidden
+        forbidden += self.learned_rules().get("forbidden_terms", [])
+        anchor["forbidden"] = list(dict.fromkeys(forbidden))
         if mode == "alt":
             from .evaluator import REAL_PEOPLE
             anchor["forbidden_people"] = REAL_PEOPLE
@@ -610,6 +613,12 @@ class Novelist:
         alias = self.protagonist_alias()
         if alias:
             cons.append(alias)
+        lr = self.learned_rules()
+        if lr.get("must_appear"):
+            cons.append("【断线角色必须回归】" + "、".join(lr["must_appear"][:5])
+                        + " —— 接下来几章内安排他们出场并有实质戏份。")
+        if lr.get("drop_roles"):
+            cons.append("【已废弃角色，不得再提】" + "、".join(lr["drop_roles"][:6]))
         tg = self.tic_guard()
         if tg:
             cons.append("【口癖抑制】" + tg)
@@ -982,6 +991,12 @@ class Novelist:
                 self.step_reflect()
             except Exception as e:
                 self._log(f"自审失败(不阻塞写作): {e}")
+        sc = int(self.q.get("selfcheck_every", 20) or 0)
+        if sc and n % sc == 0:
+            try:
+                self.step_selfcheck()
+            except Exception as e:
+                self._log(f"系统自检失败(不阻塞写作): {e}")
         return {"chapter": n, "chars": a["stats"]["cn"], "score": a["score"],
                 "elapsed": r.elapsed, "rewritten": a.get("rewritten", False)}
 
@@ -1015,6 +1030,7 @@ class Novelist:
         problems = json.dumps(ba.get("issues", []) + wa.get("issues", []),
                               ensure_ascii=False)[:2500]
 
+        rules_now = self.p._load("rules.json", {})
         prompt = (
             f"你是网文主编，正在审读《{self.p.meta.get('title','')}》。\n\n"
             f"【机器体检结论】\n全书 {ba['score']}/100，近章窗口 {wa.get('score')}/100\n"
@@ -1026,10 +1042,22 @@ class Novelist:
               "2. 每条指令都要能被检查（写什么/不写什么/写多少）\n"
               "3. 优先解决体检里的高危问题，并针对节选里读到的实际毛病补充\n"
               "4. 保留上一版里仍然有效的条目，去掉已经解决的\n"
-              "5. 12 条以内，每条一行，以「-」开头\n"
-              "直接输出守则本身，无前言。")
-        r = call("judging", prompt, on_delta, max_tokens=1600)
-        guide = clean(r.text)
+              "5. 12 条以内，每条一行，以「-」开头\n\n"
+              "写完守则后，另起一行输出 ===RULES=== ，再输出一段 JSON（不要代码围栏），"
+              "把守则里**能被程序自动检查**的部分抽出来，供检测器强制执行：\n"
+              '{"forbidden_terms":["本书绝不能出现的词，如穿帮的朝代名/现代词"],'
+              '"tics":["被用滥、应加入禁用的表达"],'
+              '"must_appear":["接下来几章必须回归的断线角色"],'
+              '"drop_roles":["建了档但一直没登场、建议删除的角色"]}\n'
+              "每项最多 8 条，没有就给空数组。只抽**确定无疑**的，宁缺毋滥。\n"
+              + (f"（已有规则，不要重复：{json.dumps(rules_now, ensure_ascii=False)[:600]}）\n"
+                 if rules_now else "")
+              + "先输出守则，再输出 ===RULES=== 与 JSON。")
+        r = call("judging", prompt, on_delta, max_tokens=2200)
+        body = clean(r.text)
+        guide, _, rules_raw = body.partition("===RULES===")
+        guide = guide.strip()
+        self._merge_rules(rules_raw)
         if guide:
             self.p.write("style_guide.md", guide)
             hist = self.p._load("reflect_log.json", [])
@@ -1175,6 +1203,109 @@ class Novelist:
             roles.pop(alias[1], None)
         self.p.save()
         return summary.replace("\n", " ")
+
+    def step_selfcheck(self, on_delta=None) -> Dict[str, Any]:
+        """系统级自检 —— 区分「内容问题」与「系统问题」。
+
+        自审守则只能改内容。但有些毛病守则治不了:
+          * 检测器漏检 (「瞳孔骤缩」不在黑名单里, 写了 9 次没人管)
+          * 检测器误报 (「西门府」被当成行政区, 天天报主场漂移)
+          * 约束没被遵守 (称谓规则埋在末尾, 模型压根不看)
+          * 配额设错 (10 条剧情写 2600 字, 必然超字数)
+        这些要改代码或配置。让系统自己识别出来写成待办, 而不是靠人一章章读。
+        """
+        done = sorted(self.p.state.get("done", []))
+        if len(done) < 5:
+            return {"skipped": "章节太少"}
+        chs = {n: self.p.chapter(n) for n in done}
+        names = [c["name"] for c in self.roster()]
+        anchor = self.world_anchor()
+        ba = book_audit(chs, characters=names, forbidden_terms=anchor.get("forbidden"),
+                        forbidden_people=anchor.get("forbidden_people"),
+                        protagonist=names[0] if names else "")
+        per = []
+        for n in done[-8:]:
+            a = self.p._load(f"audit/{n:03d}.json", {})
+            if a:
+                per.append({"n": n, "score": a.get("score"),
+                            "cn": (a.get("stats") or {}).get("cn"),
+                            "issues": [i["type"] for i in a.get("issues", [])]})
+        guide = self.p.read("style_guide.md")
+        rules = self.learned_rules()
+        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+
+        prompt = (
+            "你是这套 AI 写作系统的架构师，正在做系统级自检。\n\n"
+            f"【目标单章字数】{target}\n"
+            f"【逐章检测结果】{json.dumps(per, ensure_ascii=False)}\n\n"
+            f"【全书体检】得分 {ba['score']}，问题："
+            f"{json.dumps([{'type': i['type'], 'detail': str(i.get('detail'))[:160]} for i in ba['issues']], ensure_ascii=False)}\n\n"
+            f"【当前机器规则】{json.dumps(rules, ensure_ascii=False)[:800]}\n\n"
+            f"【当前写作守则】\n{guide[:1200]}\n\n"
+            f"【最近一章正文节选】\n{chs[done[-1]][:2000]}\n\n"
+            "请判断：哪些问题**靠改提示词/守则解决不了**，是系统本身的缺陷？只看这四类：\n"
+            "1. 漏检 —— 正文里明显有问题但检测器没报出来\n"
+            "2. 误报 —— 检测器报了但其实不是问题\n"
+            "3. 约束失效 —— 约束写了但模型明显没遵守（说明位置或写法有问题）\n"
+            "4. 配额错误 —— 字数/条数/预算之类的参数设得不合理\n\n"
+            "严格输出 JSON（不要代码围栏，没有就给空数组）：\n"
+            '{"issues":[{"kind":"漏检|误报|约束失效|配额错误","what":"一句话说清现象",'
+            '"evidence":"引用具体证据","fix":"建议怎么改（改哪个模块/参数）"}]}\n'
+            "只报**证据确凿**的，最多 5 条。纯内容问题（写得不好看、人物不立体）不要报。")
+        r = call("judging", prompt, on_delta, max_tokens=1600)
+        m = re.search(r"\{.*\}", clean(r.text), re.S)
+        found = []
+        if m:
+            try:
+                found = (json.loads(m.group(0)).get("issues") or [])[:5]
+            except Exception:
+                pass
+        if found:
+            log = self.p._load("system_issues.json", [])
+            log.append({"at_chapter": done[-1], "book_score": ba["score"], "issues": found})
+            self.p.write("system_issues.json", json.dumps(log, ensure_ascii=False, indent=2))
+            md = [f"# 系统级待办（自动生成）\n\n> 由 step_selfcheck 产出，"
+                  f"这些是**改提示词解决不了**、需要动代码或配置的问题。\n"]
+            for e in log[-6:]:
+                md.append(f"\n## @第{e['at_chapter']}章（全书 {e['book_score']} 分）\n")
+                for i in e["issues"]:
+                    md.append(f"- **[{i.get('kind')}]** {i.get('what')}\n"
+                              f"  - 证据：{i.get('evidence')}\n"
+                              f"  - 建议：{i.get('fix')}\n")
+            self.p.write("SYSTEM_ISSUES.md", "".join(md))
+        self._log(f"系统自检@第{done[-1]}章 → {len(found)} 条系统级问题")
+        return {"issues": found, "book_score": ba["score"]}
+
+    def _merge_rules(self, raw: str) -> Dict[str, Any]:
+        """把自审抽出的结构化规则并进 rules.json —— 让模型的发现变成机器强制。
+
+        这是闭环的关键: 自审如果只产出一段文字守则, 模型下次照样犯;
+        只有把「严禁出现大汉一词」变成检测器里的 forbidden_terms,
+        才会在生成后被真正拦下来。
+        """
+        m = re.search(r"\{.*\}", raw or "", re.S)
+        if not m:
+            return {}
+        try:
+            new = json.loads(m.group(0))
+        except Exception:
+            return {}
+        cur = self.p._load("rules.json", {})
+        changed = {}
+        for k in ("forbidden_terms", "tics", "must_appear", "drop_roles"):
+            add = [str(x).strip() for x in (new.get(k) or []) if str(x).strip()][:8]
+            old = cur.get(k, [])
+            merged = list(dict.fromkeys(old + add))[:40]
+            if merged != old:
+                changed[k] = [x for x in add if x not in old]
+            cur[k] = merged
+        if changed:
+            self.p.write("rules.json", json.dumps(cur, ensure_ascii=False, indent=2))
+            self._log("自审新增机器规则: " + json.dumps(changed, ensure_ascii=False))
+        return changed
+
+    def learned_rules(self) -> Dict[str, Any]:
+        return self.p._load("rules.json", {})
 
     def _l2(self, a: int, b: int):
         sm = self.p.state.get("summaries", {})

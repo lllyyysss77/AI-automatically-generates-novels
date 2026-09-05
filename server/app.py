@@ -225,6 +225,8 @@ def project_detail(slug: str):
         "characters": p.read("characters.md"),
         "outline": p.read("outline.md"),
         "style_guide": p.read("style_guide.md"),
+        "rules": p._load("rules.json", {}),
+        "system_issues": p.read("SYSTEM_ISSUES.md"),
         "volumes": p._load("volumes.json", []),
         "chapter_outlines": p._load("chapter_outlines.json", {}),
         "memory": p.mem.stats(),
@@ -454,6 +456,8 @@ def step(slug: str):
                 nv.step_repair(emit)
             elif what == "volumes":
                 nv.step_volumes(emit)
+            elif what == "selfcheck":
+                nv.step_selfcheck(emit)
             elif what == "reflect":
                 nv.step_reflect(emit)
             elif what == "chapter":
