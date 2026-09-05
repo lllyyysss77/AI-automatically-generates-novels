@@ -5,8 +5,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 from urllib.parse import quote
 import re
 import sys
@@ -30,6 +32,45 @@ from server.evaluator import audit, book_audit, window_audit
 
 WEB = ROOT / "web"
 app = Flask(__name__, static_folder=None)
+app.secret_key = os.environ.get("NOVEL_SECRET") or secrets.token_hex(16)
+
+# 访问密码。留空 = 不启用鉴权（本机自用）。生产务必在 .env 里设置。
+AUTH_PASSWORD = (os.environ.get("NOVEL_PASSWORD") or "").strip()
+_TOKEN = hashlib.sha256(
+    (AUTH_PASSWORD + app.secret_key).encode()).hexdigest()[:32] if AUTH_PASSWORD else ""
+OPEN_PATHS = {"/api/health", "/login", "/api/login"}
+
+
+@app.before_request
+def _guard():
+    if not AUTH_PASSWORD:
+        return None
+    if request.path in OPEN_PATHS or request.path.startswith("/css/"):
+        return None
+    if request.cookies.get("novel_auth") == _TOKEN:
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "未登录", "login_required": True}), 401
+    return send_from_directory(WEB, "login.html")
+
+
+@app.post("/api/login")
+def login():
+    if not AUTH_PASSWORD:
+        return jsonify({"ok": True, "auth": False})
+    if (request.json or {}).get("password") == AUTH_PASSWORD:
+        r = jsonify({"ok": True})
+        r.set_cookie("novel_auth", _TOKEN, httponly=True, samesite="Lax",
+                     max_age=30 * 86400)
+        return r
+    return jsonify({"ok": False, "error": "密码错误"}), 401
+
+
+@app.post("/api/logout")
+def logout():
+    r = jsonify({"ok": True})
+    r.delete_cookie("novel_auth")
+    return r
 
 # 后台自动写作任务: slug -> 状态
 JOBS: Dict[str, Dict[str, Any]] = {}

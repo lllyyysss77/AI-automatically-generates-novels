@@ -58,6 +58,10 @@ function applyTheme(t) {
     applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   $('#btn-new').onclick = newProjectModal;
   $$('.nav-item[data-view]').forEach(n => n.onclick = () => go(n.dataset.view));
+  document.addEventListener('keydown', e => {          // 退出登录: Ctrl+Shift+Q
+    if (e.ctrlKey && e.shiftKey && e.key === 'Q')
+      fetch('/api/logout', {method:'POST'}).then(() => location.reload());
+  });
 
   try {
     S.catalog = await API.catalog();
@@ -66,6 +70,9 @@ function applyTheme(t) {
     const h = await API.health();
     if (!h.gateways) toast('没有可用模型网关，请配置 .env', 'err');
   } catch (e) {
+    if (String(e.message).includes('login_required') || String(e.message).includes('未登录')) {
+      location.href = '/login.html'; return;
+    }
     toast('后端连接失败：' + e.message, 'err');
   }
   await refreshSidebar();
