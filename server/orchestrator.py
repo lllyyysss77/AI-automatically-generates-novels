@@ -875,11 +875,12 @@ class Novelist:
         # 不合格自动重写一次 (只做一轮, 避免无限循环烧钱)
         if a["score"] < retry_on_low and text:
             probs = "；".join(f"{i['type']}{i.get('samples','')}" for i in a["issues"][:6])
-            over = a["stats"]["cn"] > target * 1.3
+            over_note = ""
+            if a["stats"]["cn"] > target * 1.3:
+                over_note = (f"另外字数严重超标（{a['stats']['cn']}/{target}），必须压缩到 "
+                             f"{target} 字左右，删掉旁枝末节与重复铺陈，保留主线与爽点。\n")
             fix = (f"下面这章 AI 味检测不合格（{a['score']}分）。问题：{probs}\n"
-                   + (f"另外字数严重超标（{a['stats']['cn']}/{target}），必须压缩到 "
-                      f"{target} 字左右，删掉旁枝末节与重复铺陈，保留主线与爽点。\n"
-                      if over else "")
+                   f"{over_note}"
                    f"禁用套话：{'、'.join(self.blacklist())}\n"
                    f"请重写，保持剧情完全不变，只改语言：去掉套话与 AI 腔，"
                    f"句式长短交错，段落节奏有变化，字数保持 {target} 字左右。"

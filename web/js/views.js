@@ -103,7 +103,7 @@ function newProjectModal() {
 
 /* ─────────────────────────── 项目详情 ─────────────────────────── */
 const TABS = [['overview','概览'],['setup','设定'],['outline','大纲'],
-              ['chapters','章节'],['memory','记忆'],['export','导出']];
+              ['chapters','章节'],['quality','质检'],['memory','记忆'],['export','导出']];
 
 const ProjectView = {
   title: () => S.cur ? S.cur.meta.title : '项目',
@@ -196,6 +196,24 @@ const TabRender = {
         <div class="card-sub" style="margin-top:8px">选中文字 → 右键 → 扩写 / 润色 / 去 AI 味 / 加冲突…（菜单来自内容类型包 + 题材包）</div>
         </div></div>`;
   },
+  quality(p) {
+    return `<div class="card"><div class="card-head"><div class="card-title">三层质检</div>
+        <div class="card-sub">单章合格 ≠ 全书合格：逐章 95 分的稿子，全书体检可能只有 20 分</div>
+        <div class="card-actions">
+          <button class="btn btn-sm btn-primary" id="q-book">全书体检</button>
+          <input class="input" id="q-n" type="number" style="width:78px"
+                 value="${(p.state.done||[]).slice(-1)[0]||1}">
+          <button class="btn btn-sm" id="q-win">邻章窗口</button></div></div>
+        <div id="q-out"><div class="card-sub">点右上角开始体检</div></div></div>
+      <div class="card"><div class="card-head"><div class="card-title">自审守则</div>
+        <div class="card-sub">每 ${(S.settings&&S.settings.quality&&S.settings.quality.reflect_every)||5} 章自读自批一次，结论注入后续每一章</div>
+        <div class="card-actions"><button class="btn btn-sm" id="q-reflect">立即自审</button></div></div>
+        <div class="mono-log" id="q-guide" style="max-height:280px">加载中…</div></div>
+      <div class="card"><div class="card-head"><div class="card-title">设定治理</div>
+        <div class="card-sub">世界观被污染时不必推倒重来</div>
+        <div class="card-actions"><button class="btn btn-sm" id="q-repair">设定返修</button></div></div>
+        <div id="q-anchor" class="mono-log">加载中…</div></div>`;
+  },
   memory(p) {
     const m = p.memory || {};
     return `<div class="card"><div class="card-head"><div class="card-title">多记忆索引</div>
@@ -257,6 +275,55 @@ const TabMount = {
       bindMenus();
     });
     bindMenus();
+  },
+  quality() {
+    const slug = encodeURIComponent(S.cur.slug);
+    const render = (r, title) => {
+      if (r.error) return `<div class="card-sub">${esc(r.error)}</div>`;
+      const k = r.score >= 80 ? 'ok' : r.score >= 55 ? 'warn' : 'err';
+      return `<div style="margin-bottom:12px"><b>${title}</b>
+        <span class="badge badge-${k}" style="margin-left:8px">${r.score} / 100</span>
+        ${r.total_words?`<span class="card-sub"> · ${fmtNum(r.total_words)} 字 / ${r.chapters} 章</span>`:''}</div>
+        ${(r.issues||[]).length ? `<table class="tbl"><thead><tr><th style="width:70px">级别</th>
+          <th style="width:150px">问题</th><th>详情</th></tr></thead><tbody>` +
+          r.issues.map(i=>{
+            const lv={high:'err',mid:'warn',low:'neutral'}[i.level]||'neutral';
+            let d=i.detail; if (typeof d!=='string') d=JSON.stringify(d,null,0);
+            return `<tr><td><span class="badge badge-${lv}">${i.level}</span></td>
+              <td><b>${esc(i.type)}</b></td>
+              <td style="color:var(--text-2);font-size:12.5px">${esc(String(d||'').slice(0,320))}</td></tr>`;
+          }).join('') + `</tbody></table>`
+          : '<div class="card-sub">未发现问题</div>'}`;
+    };
+    $('#q-book').onclick = async () => {
+      $('#q-out').innerHTML = '<div class="card-sub">体检中…</div>';
+      try { $('#q-out').innerHTML = render(await API.get(`/api/projects/${slug}/bookaudit`), '全书体检'); }
+      catch(e){ $('#q-out').innerHTML = `<div class="card-sub">${esc(e.message)}</div>`; }
+    };
+    $('#q-win').onclick = async () => {
+      const n = +$('#q-n').value;
+      $('#q-out').innerHTML = '<div class="card-sub">体检中…</div>';
+      try {
+        const r = await API.get(`/api/projects/${slug}/window/${n}`);
+        $('#q-out').innerHTML = render(r, `第 ${n} 章 · 邻章窗口 ${JSON.stringify(r.window||[])}`);
+      } catch(e){ $('#q-out').innerHTML = `<div class="card-sub">${esc(e.message)}</div>`; }
+    };
+    $('#q-reflect').onclick = () => runStep('reflect', '#q-guide', '自审');
+    $('#q-repair').onclick = () => runStep('repair', null, '设定返修');
+    (async () => {
+      try {
+        const d = await API.project(S.cur.slug);
+        $('#q-guide').textContent = d.style_guide || '（还没有自审守则，写满几章后自动生成）';
+      } catch { $('#q-guide').textContent = '(读取失败)'; }
+      try {
+        const a = await API.get(`/api/projects/${slug}/anchor`);
+        $('#q-anchor').textContent =
+          `历史模式：${a.anchor.mode}\n国号：${a.anchor.dynasty||'（不适用）'}\n` +
+          `主场：${a.anchor.main_place||'-'}\n禁用术语：${(a.anchor.forbidden||[]).slice(0,10).join('、')||'无'}\n` +
+          `角色花名册（${a.roster.length}）：${a.roster.join('、')}\n\n` +
+          `下一章将收到的质检反馈：\n${a.tic_guard||'（暂无）'}`;
+      } catch(e){ $('#q-anchor').textContent = '(读取失败) ' + e.message; }
+    })();
   },
   memory() {
     const go = async () => {

@@ -252,7 +252,42 @@ def c14(page):
     shot(page, "14-probe")
 
 
-CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14]
+@case(15, "质检页：全书体检 + 邻章窗口 + 锚定信息")
+def c15(page):
+    open_first_project(page)
+    page.click('.tab[data-tab="quality"]')
+    page.wait_for_selector("#q-book", timeout=15000)
+    # 锚定信息异步加载
+    page.wait_for_function(
+        "() => document.querySelector('#q-anchor') && "
+        "document.querySelector('#q-anchor').textContent.includes('历史模式')", timeout=20000)
+    a = page.locator("#q-anchor").inner_text()
+    assert "国号" in a and "角色花名册" in a, f"锚定信息不全: {a[:120]}"
+    page.click("#q-book")
+    page.wait_for_selector("#q-out .badge", timeout=60000)
+    out = page.locator("#q-out").inner_text()
+    assert "/ 100" in out, f"未显示体检得分: {out[:120]}"
+    shot(page, "15-quality")
+    page.click("#q-win")
+    page.wait_for_timeout(2500)
+    assert "邻章窗口" in page.locator("#q-out").inner_text() or \
+           "/ 100" in page.locator("#q-out").inner_text()
+
+
+@case(16, "搜索接口：框架内建检索可用或明确报不可用")
+def c16(page):
+    r = page.request.get(f"{BASE}/api/search?q=%E5%AE%8B%E4%BB%A3%E7%9F%A5%E5%8E%BF&k=3")
+    assert r.ok, f"HTTP {r.status}"
+    d = r.json()
+    assert "ok" in d, "返回结构不对"
+    if d["ok"]:
+        assert d.get("provider"), "未标明检索 provider"
+        assert isinstance(d.get("results"), list)
+    else:
+        assert d.get("error"), "不可用时应给出原因"
+
+
+CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16]
 
 
 def main():

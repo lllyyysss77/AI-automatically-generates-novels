@@ -182,6 +182,8 @@ def project_detail(slug: str):
         "world_bible": p.read("world_bible.md"),
         "characters": p.read("characters.md"),
         "outline": p.read("outline.md"),
+        "style_guide": p.read("style_guide.md"),
+        "volumes": p._load("volumes.json", []),
         "chapter_outlines": p._load("chapter_outlines.json", {}),
         "memory": p.mem.stats(),
         "job": JOBS.get(slug, {}),
