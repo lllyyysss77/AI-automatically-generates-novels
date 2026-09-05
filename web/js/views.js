@@ -421,15 +421,18 @@ function menuItems() {
   const lvl = (t.levels||[]).slice(-1)[0] || {};
   const legacy = (S.catalog.shortcuts||{})['legacy-genre-menus'];
   const gname = (S.catalog.genres.find(g=>g.id===S.cur.meta.genre_id)||{}).name;
+  const genre = S.catalog.genres.find(g=>g.id===S.cur.meta.genre_id) || {};
   const layers = [
-    S.catalog.context_menus || [],
-    (t.menus||{})[lvl.id] || [],
-    (legacy && legacy.menus && legacy.menus[gname]) || [],
+    ['通用',   S.catalog.context_menus || []],
+    ['体裁',   (t.menus||{})[lvl.id] || []],
+    ['题材',   genre.menus || (legacy && legacy.menus && legacy.menus[gname]) || []],
   ];
   const seen = new Set(), items = [];
-  for (const layer of layers)
+  for (const [group, layer] of layers)
     for (const i of layer)
-      if (i && i.name && i.prompt && !seen.has(i.name)) { seen.add(i.name); items.push(i); }
+      if (i && i.name && i.prompt && !seen.has(i.name)) {
+        seen.add(i.name); items.push({...i, group});
+      }
   return items;
 }
 

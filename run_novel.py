@@ -87,6 +87,14 @@ def cmd_rewrite(a):
     print(json.dumps(r, ensure_ascii=False, indent=2))
 
 
+def cmd_repair(a):
+    p = Project(slugify(a.title))
+    if not p.meta:
+        sys.exit("项目不存在")
+    r = Novelist(p).repair_violations(limit=a.limit, dry=a.dry)
+    print(json.dumps(r, ensure_ascii=False, indent=2)[:3000])
+
+
 def cmd_status(a):
     p = Project(slugify(a.title))
     if not p.meta:
@@ -125,6 +133,11 @@ if __name__ == "__main__":
     w.add_argument("--chapter", type=int, required=True)
     w.add_argument("--mode", default="polish", choices=["polish", "replace", "fork"])
     w.add_argument("--note", default="")
+
+    rp = sub.add_parser("repair"); rp.set_defaults(f=cmd_repair)
+    rp.add_argument("--title", required=True)
+    rp.add_argument("--limit", type=int, default=10)
+    rp.add_argument("--dry", action="store_true", help="只列候选，不动手")
 
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
     s.add_argument("--title", required=True)

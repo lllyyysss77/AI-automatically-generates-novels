@@ -139,15 +139,22 @@ def c8(page):
     page.locator(".chapter-row").first.click()
     page.wait_for_timeout(1500)
     n = page.evaluate("menuItems().length")
-    names = page.evaluate("menuItems().map(i=>i.name)")
-    assert n >= 5, f"右键菜单项过少 {n}: {names}"
+    groups = page.evaluate("() => { const g={}; menuItems().forEach(i=>g[i.group]=(g[i.group]||0)+1); return g; }")
+    assert n >= 15, f"右键菜单项过少 {n}，分组 {groups}"
+    assert "通用" in groups and "题材" in groups, f"缺分组: {groups}"
     # 真实触发一次右键
     page.evaluate("""() => {
       const ta = document.querySelector('#c-body');
       ta.focus(); ta.setSelectionRange(0, 40);
       ta.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:400, clientY:300}));
     }""")
-    page.wait_for_timeout(600)
+    page.wait_for_timeout(700)
+    dom = page.locator("#ctx-menu .ctx-item").count()
+    assert dom >= 15, f"DOM 只渲染了 {dom} 项"
+    assert page.locator("#ctx-menu .ctx-group").count() >= 2, "菜单未分组"
+    page.fill("#ctx-menu .ctx-search", "冲突")
+    page.wait_for_timeout(400)
+    assert 0 < page.locator("#ctx-menu .ctx-item").count() < dom, "筛选未生效"
     shot(page, "08-context-menu")
 
 

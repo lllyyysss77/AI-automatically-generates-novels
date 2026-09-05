@@ -48,5 +48,119 @@
       "该年份政策变化",
       "该年份影视与歌曲"
     ]
-  }
+  },
+  "menus": [
+    {
+      "name": "深化冲突",
+      "prompt": "基于背景：${background}\n人物：${characters}\n在保持合理性的前提下，将以下内容的冲突升级，制造更强的戏剧性：${selected_text}"
+    },
+    {
+      "name": "增加伏笔",
+      "prompt": "分析剧情：${plot}\n为以下内容设计巧妙的伏笔，为后续发展埋下种子：${selected_text}"
+    },
+    {
+      "name": "完善人物动机",
+      "prompt": "基于人物性格：${characters}\n关系：${relationships}\n补充和优化以下内容中人物的行动动机，使其更符合性格：${selected_text}"
+    },
+    {
+      "name": "强化感情线",
+      "prompt": "基于角色关系：${relationships}\n加强以下内容中的感情发展，让感情线更吸引人：${selected_text}"
+    },
+    {
+      "name": "优化节奏",
+      "prompt": "分析当前剧情走向，调整以下内容的节奏安排，确保张弛有度：${selected_text}"
+    },
+    {
+      "name": "扩充细节",
+      "prompt": "基于背景：${background}\n为以下内容补充更多细节，增强画面感和沉浸感：${selected_text}"
+    },
+    {
+      "name": "提升高潮",
+      "prompt": "在符合逻辑的前提下，将以下内容的高潮部分改写得更加震撼：${selected_text}"
+    },
+    {
+      "name": "商战升级",
+      "prompt": "在${selected_text}中加入一场高水平商业博弈，突出主角的商业才能"
+    },
+    {
+      "name": "危机应对",
+      "prompt": "为${selected_text}设置一个重大危机及其化解过程，展现主角的应变能力"
+    },
+    {
+      "name": "资源整合",
+      "prompt": "在${selected_text}中展现主角整合各方资源的手段与能力"
+    },
+    {
+      "name": "深化后悔",
+      "prompt": "在${selected_text}中展现更深层的后悔情感"
+    },
+    {
+      "name": "愧疚折磨",
+      "prompt": "描写${selected_text}中的内心煎熬"
+    },
+    {
+      "name": "挽回行动",
+      "prompt": "设计${selected_text}中的弥补努力"
+    },
+    {
+      "name": "情感爆发",
+      "prompt": "在${selected_text}中展现压抑情感的爆发"
+    },
+    {
+      "name": "心理转变",
+      "prompt": "描述${selected_text}中的心理变化过程"
+    },
+    {
+      "name": "记忆闪回",
+      "prompt": "在${selected_text}中插入关键往事回忆"
+    },
+    {
+      "name": "救赎时刻",
+      "prompt": "设计${selected_text}中的救赎关键点"
+    },
+    {
+      "name": "原谅契机",
+      "prompt": "为${selected_text}创造和解的可能"
+    },
+    {
+      "name": "情感修复",
+      "prompt": "描写${selected_text}中的关系修复过程"
+    },
+    {
+      "name": "成长蜕变",
+      "prompt": "展现${selected_text}中的心智成长"
+    },
+    {
+      "name": "强化·第一章重生瞬间",
+      "prompt": "在下面这段中强化「第一章重生瞬间」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "强化·第二章开始布局",
+      "prompt": "在下面这段中强化「第二章开始布局」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "强化·打脸前世仇人",
+      "prompt": "在下面这段中强化「打脸前世仇人」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "强化·吃时代红利",
+      "prompt": "在下面这段中强化「吃时代红利」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "避坑·时间线错误 (说",
+      "prompt": "改写下面这段，避免本题材的常见毛病「时间线错误 (说 2010 年用微信 」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "避坑·太顺利 (重生 ",
+      "prompt": "改写下面这段，避免本题材的常见毛病「太顺利 (重生 = 金手指已够强, 再给」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "避坑·反派前世就是纸片",
+      "prompt": "改写下面这段，避免本题材的常见毛病「反派前世就是纸片人 (要有让主角失败的现」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "清题材套话",
+      "prompt": "改写下面这段，清除本题材套话（给老子等着、这一世我要、重活一世、上天又给了我一次机会、前世今生、还是原来的配方）及其变体，直接输出：\n${selected_text}"
+    }
+  ]
 }

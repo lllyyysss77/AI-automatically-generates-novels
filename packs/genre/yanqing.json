@@ -36,5 +36,51 @@
       "城市约会场景",
       "礼物与消费水平"
     ]
-  }
+  },
+  "menus": [
+    {
+      "name": "商业布局",
+      "prompt": "在${selected_text}中展现一场惊心动魄的商业收购"
+    },
+    {
+      "name": "豪门对抗",
+      "prompt": "基于背景：${background}\n加入${selected_text}中的豪门势力较量"
+    },
+    {
+      "name": "霸道追爱",
+      "prompt": "基于角色关系：${relationships}\n深化${selected_text}中的霸道追求戏码"
+    },
+    {
+      "name": "家族纷争",
+      "prompt": "在${selected_text}中制造家族内部的权力争斗"
+    },
+    {
+      "name": "商战反转",
+      "prompt": "为${selected_text}设计一个商战局势的逆转"
+    },
+    {
+      "name": "感情危机",
+      "prompt": "在${selected_text}中制造感情信任的考验"
+    },
+    {
+      "name": "权力交锋",
+      "prompt": "加强${selected_text}中的权力博弈场面"
+    },
+    {
+      "name": "身世之谜",
+      "prompt": "在${selected_text}中埋下身世之谜的线索"
+    },
+    {
+      "name": "复仇布局",
+      "prompt": "展现${selected_text}中的商业复仇计划"
+    },
+    {
+      "name": "强化气场",
+      "prompt": "深化${selected_text}中霸总的强势魅力表现"
+    },
+    {
+      "name": "清题材套话",
+      "prompt": "改写下面这段，清除本题材套话（心脏漏了一拍、瞳孔一颤、他的眼底翻涌着情绪、霸道地吻上去、把她禁锢在怀里、一脸生人勿近、整个世界都静止了、千言万语）及其变体，直接输出：\n${selected_text}"
+    }
+  ]
 }

@@ -141,7 +141,8 @@ class Registry:
                  "exporters": t.get("exporters", [])}
                 for t in self.types.values()
             ],
-            "genres": [{"id": g["id"], "name": g["name"]} for g in self.genres.values()],
+            "genres": [{"id": g["id"], "name": g["name"], "menus": g.get("menus", [])}
+                       for g in self.genres.values()],
             "search": [{"id": k, "label": v.get("label", k), "type": v.get("type")}
                        for k, v in self.search_cfg.items()],
             "styles": [{"id": s["id"], "name": s["name"]} for s in self.styles.values()],

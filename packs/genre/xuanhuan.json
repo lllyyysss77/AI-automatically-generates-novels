@@ -51,5 +51,115 @@
       "山川地理",
       "礼俗禁忌"
     ]
-  }
+  },
+  "menus": [
+    {
+      "name": "问道天地",
+      "prompt": "在${selected_text}中展现问道求索过程"
+    },
+    {
+      "name": "神通大战",
+      "prompt": "描写${selected_text}中的神通法术对决"
+    },
+    {
+      "name": "势力争锋",
+      "prompt": "展示${selected_text}中的势力间较量"
+    },
+    {
+      "name": "仙缘机遇",
+      "prompt": "设计${selected_text}中的仙缘际遇"
+    },
+    {
+      "name": "大道感悟",
+      "prompt": "描述${selected_text}中的大道感悟"
+    },
+    {
+      "name": "天劫考验",
+      "prompt": "展现${selected_text}中的天劫历程"
+    },
+    {
+      "name": "神器炼制",
+      "prompt": "描写${selected_text}中的神器炼制"
+    },
+    {
+      "name": "秘境探索",
+      "prompt": "设计${selected_text}中的秘境探索"
+    },
+    {
+      "name": "因果轮回",
+      "prompt": "展示${selected_text}中的因果报应"
+    },
+    {
+      "name": "天道变化",
+      "prompt": "描述${selected_text}中的天道演变"
+    },
+    {
+      "name": "实力暴涨",
+      "prompt": "在${selected_text}中展现实力暴涨过程"
+    },
+    {
+      "name": "强者碾压",
+      "prompt": "描写${selected_text}中的压倒性战斗"
+    },
+    {
+      "name": "底牌尽出",
+      "prompt": "设计${selected_text}中的底牌释放"
+    },
+    {
+      "name": "势力臣服",
+      "prompt": "在${selected_text}中展示敌对势力臣服"
+    },
+    {
+      "name": "境界突破",
+      "prompt": "描述${selected_text}中的境界突破"
+    },
+    {
+      "name": "装逼打脸",
+      "prompt": "在${selected_text}中安排装逼打脸情节"
+    },
+    {
+      "name": "霸道镇压",
+      "prompt": "设计${selected_text}中的强势镇压"
+    },
+    {
+      "name": "威压全场",
+      "prompt": "展现${selected_text}中的气势碾压"
+    },
+    {
+      "name": "无敌战斗",
+      "prompt": "描写${selected_text}中的无敌战斗"
+    },
+    {
+      "name": "称霸天下",
+      "prompt": "为${selected_text}设计称霸情节"
+    },
+    {
+      "name": "强化·废柴/被欺压 →",
+      "prompt": "在下面这段中强化「废柴/被欺压 → 觉醒金手指」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "强化·每 2000-3",
+      "prompt": "在下面这段中强化「每 2000-3000 字一」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "强化·每 5-10 章",
+      "prompt": "在下面这段中强化「每 5-10 章一个大高潮 」这个本题材核心爽点，不改主线走向，直接输出改写结果：\n${selected_text}"
+    },
+    {
+      "name": "避坑·用修真术语 (不",
+      "prompt": "改写下面这段，避免本题材的常见毛病「用修真术语 (不能有\"炼气/筑基/金丹/」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "避坑·用武侠术语 (不",
+      "prompt": "改写下面这段，避免本题材的常见毛病「用武侠术语 (不能有\"内力/真气/点穴\"」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "避坑·境界跳跃 (不能",
+      "prompt": "改写下面这段，避免本题材的常见毛病「境界跳跃 (不能 A 章练气, B 章直」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "清题材套话",
+      "prompt": "改写下面这段，清除本题材套话（境界如此之低, 怎么可能有这种修为、区区 XX 境, 也敢在本少爷面前放肆、你这是什么功法, 居然能 XXX、不可能, 绝对不可能、就凭你?、此子不除, 必成大患、少年, 你成功引起了我的注意、想不到此人如此年轻, 竟有如此修为）及其变体，直接输出：\n${selected_text}"
+    }
+  ]
 }

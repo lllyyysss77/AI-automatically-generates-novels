@@ -261,6 +261,15 @@ def save_chapter(slug: str, n: int):
     return jsonify({"ok": True, "audit": a})
 
 
+@app.post("/api/projects/<slug>/repair")
+def repair_api(slug: str):
+    """按当前规则批量返修旧章。dry=1 只看候选不动手。"""
+    b = request.json or {}
+    nv = Novelist(Project(slug))
+    return jsonify(nv.repair_violations(limit=int(b.get("limit") or 10),
+                                        dry=bool(b.get("dry"))))
+
+
 @app.post("/api/projects/<slug>/rewrite/<int:n>")
 def rewrite_api(slug: str, n: int):
     """章节重写: polish(只改语言) / replace(整章重写) / fork(分叉)。旧稿自动备份。"""

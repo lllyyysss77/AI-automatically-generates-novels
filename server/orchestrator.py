@@ -1032,10 +1032,19 @@ class Novelist:
         chs = {n: self.p.chapter(n) for n in done}
         names = [c["name"] for c in self.roster()] or []
         anchor = self.world_anchor()
-        ba = book_audit(chs, characters=names,
-                        forbidden_terms=anchor.get("forbidden"),
+        forb = [w for w in (anchor.get("forbidden") or []) if w not in set(names)]
+        ba = book_audit(chs, characters=names, forbidden_terms=forb,
                         forbidden_people=anchor.get("forbidden_people"),
                         protagonist=names[0] if names else "")
+        # 全书分会被前期旧账永久拖住, 再给一个「最近 20 章」的趋势分,
+        # 让自审看得见改进, 而不是每次都看到同一个分数
+        recent_ids = sorted(chs)[-20:]
+        ba_recent = book_audit({i: chs[i] for i in recent_ids}, characters=names,
+                               forbidden_terms=forb,
+                               forbidden_people=anchor.get("forbidden_people"),
+                               protagonist=names[0] if names else "")
+        ba["recent_score"] = ba_recent["score"]
+        ba["recent_range"] = f"{recent_ids[0]}-{recent_ids[-1]}" if recent_ids else ""
         wa = window_audit(chs, done[-1], span=3,
                           outlines=self.p._load("chapter_outlines.json", {}))
 
@@ -1084,7 +1093,8 @@ class Novelist:
                          "issues": [i["type"] for i in ba.get("issues", [])],
                          "guide_chars": len(guide)})
             self.p.write("reflect_log.json", json.dumps(hist, ensure_ascii=False, indent=2))
-        self._log(f"自审@第{done[-1]}章 全书{ba['score']} 窗口{wa.get('score')} "
+        self._log(f"自审@第{done[-1]}章 全书{ba['score']}(近{ba.get('recent_score')}) "
+                  f"窗口{wa.get('score')} "
                   f"→ 守则 {len(guide)} 字")
         return {"book": ba, "window": wa, "guide": guide}
 
@@ -1161,6 +1171,48 @@ class Novelist:
         return {"ok": True, "mode": mode, "score": a["score"],
                 "chars": a["stats"]["cn"], "backup": f".ckpt/{n:03d}_v{ver}.md",
                 "affected": affected}
+
+    def repair_violations(self, limit: int = 10, dry: bool = False,
+                          on_delta=None) -> Dict[str, Any]:
+        """按当前规则批量返修旧章 —— 规则是后来长出来的，前面的章享受不到。
+
+        实测: 第 20 章才加的禁用词，改不了 1-19 章，于是全书分被存量永久拖住
+        （全书 52 而最近 20 章 74）。这里找出违规最重的章节做 polish 重写，
+        剧情不动只改语言，旧稿照例备份到 .ckpt/。
+        """
+        done = sorted(self.p.state.get("done", []))
+        bl = self.blacklist()
+        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+        ranked = []
+        for n in done:
+            t = self.p.chapter(n)
+            if not t:
+                continue
+            a = audit(t, extra_blacklist=bl, target_words=target,
+                      check_modern=self.history_mode() in ("real", "alt"))
+            hits = {w: t.count(w) for w in bl if w in t}
+            if a["score"] < self.q["audit_pass_score"] or hits:
+                ranked.append({"n": n, "score": a["score"],
+                               "violations": sum(hits.values()), "hits": hits})
+        ranked.sort(key=lambda x: (-x["violations"], x["score"]))
+        picked = ranked[:limit]
+        if dry:
+            return {"candidates": ranked, "would_repair": [x["n"] for x in picked]}
+
+        fixed = []
+        for item in picked:
+            n = item["n"]
+            note = ("重点清除这些违规表达：" + "、".join(list(item["hits"])[:8])
+                    if item["hits"] else "去掉套话与 AI 腔，句式长短交错")
+            try:
+                r = self.rewrite_chapter(n, mode="polish", note=note, on_delta=on_delta)
+                fixed.append({"n": n, "before": item["score"],
+                              "after": r.get("score"), "ok": r.get("ok")})
+            except Exception as e:
+                fixed.append({"n": n, "error": str(e)[:120]})
+        self._log(f"批量返修 {len(fixed)} 章: " +
+                  "、".join(f"{f['n']}({f.get('before')}→{f.get('after')})" for f in fixed))
+        return {"repaired": fixed, "remaining": len(ranked) - len(picked)}
 
     def _extract_state(self, n: int, text: str) -> str:
         """一次调用抽出: 本章摘要 / 新埋与回收的伏笔 / 角色状态变化 / 时间推进。
@@ -1256,7 +1308,8 @@ class Novelist:
             "你是这套 AI 写作系统的架构师，正在做系统级自检。\n\n"
             f"【目标单章字数】{target}\n"
             f"【逐章检测结果】{json.dumps(per, ensure_ascii=False)}\n\n"
-            f"【全书体检】得分 {ba['score']}，问题："
+            f"【全书体检】总分 {ba['score']}；最近 {ba.get('recent_range')} 章 "
+            f"{ba.get('recent_score')} 分（分差说明前期旧账，重点看后者的趋势）\n问题："
             f"{json.dumps([{'type': i['type'], 'detail': str(i.get('detail'))[:160]} for i in ba['issues']], ensure_ascii=False)}\n\n"
             f"【当前机器规则】{json.dumps(rules, ensure_ascii=False)[:800]}\n\n"
             f"【当前写作守则】\n{guide[:1200]}\n\n"
@@ -1294,6 +1347,40 @@ class Novelist:
         self._log(f"系统自检@第{done[-1]}章 → {len(found)} 条系统级问题")
         return {"issues": found, "book_score": ba["score"]}
 
+    # 自审抽出的规则必须过守门 —— 实测模型把角色名「蔡知县」、条件描述
+    # 「蔡知县（作为地点）」、带占位符的「武松离开的第X天」、甚至检测器的内部
+    # 标签「脸色X白」全塞进了禁用词表，结果一个正常配角被判 45 次违规，
+    # 全书分数被永久钉死，而且这条禁令还注入提示词让模型不敢写他。
+    _RULE_REJECT = re.compile(
+        r"[（(].*?[）)]"                          # 带括号的条件说明
+        r"|作为|用作|无铺垫|不得|禁止|应当|时候|场景|之类|等等"  # 描述句而非词条
+        r"|[A-Za-z]"                              # 含占位符 X/N 或英文
+        r"|^\W*$")
+
+    def _valid_rule(self, w: str, roster_names: set,
+                    corpus: Optional[Dict[int, str]] = None) -> tuple:
+        """返回 (是否可作为机器禁用词, 拒绝原因)。
+
+        最硬的一条判据是最后那个: **在已写正文里高频且广泛分布的词不能无条件禁用**。
+        角色的职务称呼（「蔡知县」，而花名册里登记的是「蔡德茂」）光靠对名单拦不住,
+        但它必然高频且遍布全书 —— 禁掉等于让模型不敢写这个角色。
+        """
+        w = (w or "").strip()
+        if not (2 <= len(w) <= 12):
+            return False, "长度不合理"
+        if w in roster_names:
+            return False, "是本书角色名"
+        if any(w in n or n in w for n in roster_names if len(n) >= 3):
+            return False, "与角色名重叠"
+        if self._RULE_REJECT.search(w):
+            return False, "含条件说明或占位符，不是可字面匹配的词"
+        if corpus:
+            hit = [n for n, t in corpus.items() if w in t]
+            if len(hit) >= max(4, len(corpus) * 0.3):
+                return False, (f"在 {len(hit)}/{len(corpus)} 章都出现，"
+                               f"是本书常用语或角色称呼，不宜无条件禁用")
+        return True, ""
+
     def _merge_rules(self, raw: str) -> Dict[str, Any]:
         """把自审抽出的结构化规则并进 rules.json —— 让模型的发现变成机器强制。
 
@@ -1309,14 +1396,24 @@ class Novelist:
         except Exception:
             return {}
         cur = self.p._load("rules.json", {})
-        changed = {}
+        roster_names = {c["name"] for c in self.roster()}
+        corpus = {n: self.p.chapter(n) for n in sorted(self.p.state.get("done", []))[-30:]}
+        changed, rejected = {}, []
         for k in ("forbidden_terms", "tics", "must_appear", "drop_roles"):
             add = [str(x).strip() for x in (new.get(k) or []) if str(x).strip()][:8]
+            if k in ("forbidden_terms", "tics"):      # 只有禁用类需要守门
+                ok = []
+                for w in add:
+                    good, why = self._valid_rule(w, roster_names, corpus)
+                    (ok if good else rejected).append(w if good else f"{w}（{why}）")
+                add = ok
             old = cur.get(k, [])
             merged = list(dict.fromkeys(old + add))[:40]
             if merged != old:
                 changed[k] = [x for x in add if x not in old]
             cur[k] = merged
+        if rejected:
+            self._log("规则守门拦下: " + "；".join(rejected[:5]))
         if changed:
             self.p.write("rules.json", json.dumps(cur, ensure_ascii=False, indent=2))
             self._log("自审新增机器规则: " + json.dumps(changed, ensure_ascii=False))

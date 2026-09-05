@@ -42,5 +42,99 @@
       "家畜养殖",
       "手工制作工艺"
     ]
-  }
+  },
+  "menus": [
+    {
+      "name": "技术创新",
+      "prompt": "在${selected_text}中展示农业技术创新"
+    },
+    {
+      "name": "产业升级",
+      "prompt": "描述${selected_text}中的产业升级过程"
+    },
+    {
+      "name": "市场营销",
+      "prompt": "设计${selected_text}中的市场营销策略"
+    },
+    {
+      "name": "品牌打造",
+      "prompt": "展现${selected_text}中的农产品品牌化"
+    },
+    {
+      "name": "生态建设",
+      "prompt": "描写${selected_text}中的生态农业建设"
+    },
+    {
+      "name": "人才培养",
+      "prompt": "设计${selected_text}中的技术人才培养"
+    },
+    {
+      "name": "休闲农业",
+      "prompt": "展示${selected_text}中的观光农业发展"
+    },
+    {
+      "name": "社区营造",
+      "prompt": "描述${selected_text}中的乡村社区建设"
+    },
+    {
+      "name": "资源整合",
+      "prompt": "展现${selected_text}中的资源整合过程"
+    },
+    {
+      "name": "产业链条",
+      "prompt": "设计${selected_text}中的全产业链布局"
+    },
+    {
+      "name": "战略规划",
+      "prompt": "在${selected_text}中展现企业战略规划"
+    },
+    {
+      "name": "市场扩张",
+      "prompt": "设计${selected_text}中的市场扩张策略"
+    },
+    {
+      "name": "团队管理",
+      "prompt": "展示${selected_text}中的团队管理方案"
+    },
+    {
+      "name": "危机处理",
+      "prompt": "描写${selected_text}中的危机应对过程"
+    },
+    {
+      "name": "产品创新",
+      "prompt": "展现${selected_text}中的产品研发创新"
+    },
+    {
+      "name": "品牌建设",
+      "prompt": "设计${selected_text}中的品牌塑造过程"
+    },
+    {
+      "name": "资本运作",
+      "prompt": "描述${selected_text}中的资本运作手段"
+    },
+    {
+      "name": "并购重组",
+      "prompt": "展示${selected_text}中的并购重组计划"
+    },
+    {
+      "name": "商业模式",
+      "prompt": "设计${selected_text}中的商业模式创新"
+    },
+    {
+      "name": "避坑·直接暴富 (违反",
+      "prompt": "改写下面这段，避免本题材的常见毛病「直接暴富 (违反种田精神, 读者要看\"慢」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "避坑·反派过强 (种田",
+      "prompt": "改写下面这段，避免本题材的常见毛病「反派过强 (种田格局不大, 反派要合情理」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "避坑·忽略女性劳动 (",
+      "prompt": "改写下面这段，避免本题材的常见毛病「忽略女性劳动 (古代种田家务 = 女性主」，剧情不变，直接输出：\n${selected_text}"
+    },
+    {
+      "name": "清题材套话",
+      "prompt": "改写下面这段，清除本题材套话（在古代当咸鱼、老天爷赏饭吃、日出而作日落而息、小富即安、家和万事兴、远亲不如近邻）及其变体，直接输出：\n${selected_text}"
+    }
+  ]
 }

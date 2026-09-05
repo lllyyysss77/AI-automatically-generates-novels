@@ -172,8 +172,17 @@ a{color:var(--accent);text-decoration:none}
 .empty-title{font-size:15px;font-weight:600;color:var(--text-2);margin-bottom:5px}
 
 .ctx-menu{position:fixed;z-index:1000;background:var(--elevated);border:1px solid var(--border);
-          border-radius:var(--radius);box-shadow:var(--shadow-lg);padding:5px;min-width:150px;display:none}
-.ctx-item{padding:7px 11px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px}
+          border-radius:var(--radius);box-shadow:var(--shadow-lg);padding:5px;
+          min-width:212px;max-width:260px;display:none}
+.ctx-search{width:100%;padding:6px 9px;border:1px solid var(--border-strong);
+            border-radius:var(--radius-sm);background:var(--bg);color:var(--text);
+            font-size:12.5px;margin-bottom:4px}
+.ctx-search:focus{outline:none;border-color:var(--accent)}
+.ctx-body{max-height:340px;overflow-y:auto}
+.ctx-group{font-size:10.5px;font-weight:700;color:var(--text-3);letter-spacing:.08em;
+           padding:7px 11px 3px;text-transform:uppercase}
+.ctx-item{padding:6px 11px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctx-item:hover{background:var(--accent-weak);color:var(--accent)}
 
 .modal-mask{position:fixed;inset:0;background:rgba(10,12,16,.5);z-index:900;display:none;

@@ -39,11 +39,20 @@ async function openProject(slug) {
 
 async function refreshSidebar() {
   const list = await API.projects();
-  $('#proj-list').innerHTML = list.length ? list.map(p =>
-    `<div class="proj-item ${S.cur && S.cur.slug === p.slug ? 'active' : ''}" data-slug="${esc(p.slug)}">
-      <div class="proj-title">${esc(p.title)}</div>
+  // 同名项目（如归档旧稿）用 slug 区分，否则侧栏两条一模一样根本分不清
+  const dup = new Set();
+  const byTitle = {};
+  list.forEach(p => { byTitle[p.title] = (byTitle[p.title]||0)+1; });
+  Object.entries(byTitle).forEach(([t,c]) => { if (c > 1) dup.add(t); });
+  $('#proj-list').innerHTML = list.length ? list.map(p => {
+    const archived = /^_v\d+_|^_archive/.test(p.slug);
+    const tag = archived ? '<span class="badge badge-neutral" style="font-size:10px;margin-left:5px">归档</span>'
+              : (dup.has(p.title) ? `<span class="card-sub" style="font-size:11px"> · ${esc(p.slug)}</span>` : '');
+    return `<div class="proj-item ${S.cur && S.cur.slug === p.slug ? 'active' : ''}" data-slug="${esc(p.slug)}"
+       style="${archived ? 'opacity:.62' : ''}">
+      <div class="proj-title">${esc(p.title)}${tag}</div>
       <div class="proj-meta">${p.done || 0}/${p.target_chapters} 章 · ${fmtNum(p.words)} 字</div>
-    </div>`).join('') : '<div class="card-sub" style="padding:8px 10px">暂无项目</div>';
+    </div>`; }).join('') : '<div class="card-sub" style="padding:8px 10px">暂无项目</div>';
   $$('.proj-item').forEach(el => el.onclick = () => openProject(el.dataset.slug));
 }
 

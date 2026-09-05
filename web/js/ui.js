@@ -28,19 +28,41 @@ function scoreBadge(s) {
 
 /* 选中文本右键菜单 —— 局部改写能力, 老版的核心交互, 保留并做成配置驱动 */
 function bindContextMenu(el, items, onPick) {
+  const draw = (m, list, q='') => {
+    const show = q ? list.filter(x => x.name.includes(q)) : list;
+    let html = '', last = null;
+    show.forEach(it => {
+      if (it.group && it.group !== last) {
+        html += `<div class="ctx-group">${esc(it.group)}</div>`;
+        last = it.group;
+      }
+      html += `<div class="ctx-item" data-n="${esc(it.name)}">${esc(it.name)}</div>`;
+    });
+    m.querySelector('.ctx-body').innerHTML = html ||
+      '<div class="ctx-item" style="color:var(--text-3)">无匹配</div>';
+  };
   el.addEventListener('contextmenu', e => {
-    const sel = String(window.getSelection()).trim();
+    const ta = el.tagName === 'TEXTAREA';
+    const sel = ta ? el.value.slice(el.selectionStart, el.selectionEnd).trim()
+                   : String(window.getSelection()).trim();
     if (!sel) return;
     e.preventDefault();
     const m = $('#ctx-menu');
-    m.innerHTML = items.map((it,i) =>
-      `<div class="ctx-item" data-i="${i}">${esc(it.name)}</div>`).join('');
+    m.innerHTML = `<input class="ctx-search" placeholder="筛选 ${items.length} 条指令…">
+                   <div class="ctx-body"></div>`;
+    draw(m, items);
     m.style.display = 'block';
-    m.style.left = Math.min(e.clientX, innerWidth - 180) + 'px';
-    m.style.top  = Math.min(e.clientY, innerHeight - 40 - items.length*32) + 'px';
+    m.style.left = Math.min(e.clientX, innerWidth - 240) + 'px';
+    m.style.top  = Math.min(e.clientY, innerHeight - 380) + 'px';
+    const inp = m.querySelector('.ctx-search');
+    inp.oninput = () => draw(m, items, inp.value.trim());
+    setTimeout(() => inp.focus(), 30);
     m.onclick = ev => {
-      const i = ev.target.dataset.i;
-      if (i !== undefined) { $('#ctx-menu').style.display = 'none'; onPick(items[+i], sel); }
+      const n = ev.target.dataset.n;
+      if (n) {
+        m.style.display = 'none';
+        onPick(items.find(x => x.name === n), sel);
+      }
     };
   });
 }
