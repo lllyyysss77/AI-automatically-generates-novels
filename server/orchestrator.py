@@ -575,10 +575,20 @@ class Novelist:
         cast = self.cast_for(chapter_outline)
         if cast:
             resident += "\n\n【本章出场角色档案】\n" + cast
+        roles_all = self.p.read("characters.md")
+        if roles_all:
+            resident += "\n\n【全部角色档案（备查，勿引入未列出的新角色）】\n" + roles_all
 
         sm = self.p.state.get("summaries", {})
-        k = self.mcfg.get("recent_chapters", 3)
+        k = self.mcfg.get("recent_chapters", 8)
         recent = [f"第{i}章：{sm[str(i)]}" for i in range(max(1, n - k), n) if str(i) in sm]
+        # 只给一句话摘要, 模型接不住前文的文风、称谓、场景细节。
+        # 窗口有近 10 万 token 而实测只用了 20%, 完全装得下最近几章原文。
+        full_k = int(self.mcfg.get("recent_full", 2) or 0)
+        for i in range(max(1, n - full_k), n):
+            body = self.p.chapter(i)
+            if body:
+                recent.append(f"\n———— 第{i}章 正文（承接文风与细节）————\n{body}")
 
         mid = [f.read_text(encoding="utf-8")
                for f in sorted((self.p.dir / "l2_summary").glob("*.md"))]
@@ -649,14 +659,21 @@ class Novelist:
         if soft:
             cons.append("【已被用滥的表达，本章最多出现 1 次，含变体】"
                         + "、".join(soft[:24]))
+        # 分层注入 —— 之前永远取最早 6 条(FIFO), 而最早那几条恰恰是早期抽取
+        # 不准的垃圾, 于是模型永远看不到真正该收的新伏笔, 回收率卡在 4%。
         pend = self.p.mem.pending_foreshadow()
         if pend:
-            old = [f for f in pend if n - f["planted"] >= 15]
-            cons.append("未回收伏笔：" + "；".join(
-                f"第{f['planted']}章「{f['text'][:36]}」" for f in pend[:6]))
-            if old:
-                cons.append(f"【伏笔告急】以下伏笔已埋了 15 章以上还没回收，"
-                            f"尽快找机会兑现：" + "；".join(f"「{f['text'][:30]}」" for f in old[:3]))
+            cap = int(self.mcfg.get("foreshadow_show", 24))
+            urgent = [f for f in pend if n - f["planted"] >= 30][:max(4, cap // 3)]
+            active = [f for f in pend if n - f["planted"] < 12][-max(6, cap // 3):]
+            midway = [f for f in pend if 12 <= n - f["planted"] < 30][:max(4, cap // 3)]
+            show = list({f["id"]: f for f in urgent + active + midway}.values())
+            if show:
+                cons.append("【未回收伏笔】" + "；".join(
+                    f"第{f['planted']}章「{f['text'][:36]}」" for f in show))
+            if urgent:
+                cons.append(f"【伏笔告急】埋了 30 章以上还没兑现，本章或接下来几章"
+                            f"必须给个交代：" + "；".join(f"「{f['text'][:34]}」" for f in urgent))
 
         roles = self.p.state.get("roles", {})
         if roles:
@@ -1261,9 +1278,12 @@ class Novelist:
             f"严格按下面格式输出，没有内容的写「无」，不要任何多余文字：\n"
             f"摘要：（60 字以内一句话概括本章发生了什么）\n"
             f"时间：（本章相对上一章过了多久，如「当天下午」「三日后」）\n"
-            f"埋伏笔：（**只记真正的悬念**：被刻意隐藏、以后必须解开的东西，"
-            f"如身份秘密、可疑物证、未兑现的承诺、来历不明的人。"
-            f"人物性格描写、当前处境、已经讲明白的事都不算。最多 2 条，没有就写「无」）\n"
+            f"埋伏笔：（**只记真正的悬念**：被刻意隐藏、以后必须专门写一段来解开的东西。\n"
+            f"  算：身份秘密、来历不明的物证、没说破的承诺、可疑的人、被打断的话、"
+            f"莫名消失的东西。\n"
+            f"  不算：人物性格（如「某人贪婪」）、当前处境（如「某人心态转变」）、"
+            f"已经讲明白的事、单纯的剧情推进。\n"
+            f"  最多 2 条，宁可写「无」也不要凑数）\n"
             f"收伏笔：（本章解开了之前埋的哪些线索，分号分隔）\n"
             f"角色状态：（格式 姓名=所在地/身体状态/关键持有物，分号分隔，只列本章出场的）\n\n"
             f"{text[:4000]}")
@@ -1279,18 +1299,9 @@ class Novelist:
         st = self.p.state
         st.setdefault("timeline", {})[str(n)] = field("时间")
 
-        for f in [x.strip() for x in re.split(r"[;；]", field("埋伏笔")) if len(x.strip()) > 3]:
+        for f in [x.strip() for x in re.split(r"[;；]", field("埋伏笔")) if len(x.strip()) > 3][:2]:
             self.p.mem.add_foreshadow(n, f[:60])
-        # 回收: 与未回收清单做模糊匹配
-        closed = [x.strip() for x in re.split(r"[;；]", field("收伏笔")) if len(x.strip()) > 3]
-        if closed:
-            pend = self.p.mem.pending_foreshadow()
-            for c in closed:
-                key = set(re.findall(r"[一-鿿]{2}", c))
-                for f in pend:
-                    if len(key & set(re.findall(r"[一-鿿]{2}", f["text"]))) >= 2:
-                        self.p.mem.resolve_foreshadow(f["id"], n)
-                        break
+        self._resolve_foreshadow(n, text)
 
         roles = st.setdefault("roles", {})
         for item in [x.strip() for x in re.split(r"[;；]", field("角色状态")) if "=" in x]:
@@ -1512,6 +1523,42 @@ class Novelist:
         if dirty:
             self.p.write("rules.json", json.dumps(cur, ensure_ascii=False, indent=2))
         return cur
+
+    def _resolve_foreshadow(self, n: int, text: str) -> int:
+        """让模型判断本章兑现了哪些伏笔 —— 靠文本匹配永远对不上。
+
+        之前用 2-gram 重叠匹配, 模型报的措辞和埋设时的措辞几乎不重合,
+        回收率卡在 4%（216 埋 9 收）。改成把候选清单编号给模型勾选。
+        """
+        pend = self.p.mem.pending_foreshadow()
+        if not pend:
+            return 0
+        # 优先问最可能被兑现的: 埋得久的 + 最近的
+        cands = list({f["id"]: f for f in
+                      [x for x in pend if n - x["planted"] >= 20][:8]
+                      + [x for x in pend if n - x["planted"] < 20][-10:]}.values())
+        listing = "\n".join(f"{i+1}. （第{f['planted']}章）{f['text'][:50]}"
+                             for i, f in enumerate(cands))
+        prompt = (
+            f"下面是一部小说里**尚未兑现的伏笔清单**，以及刚写完的第 {n} 章正文。\n"
+            f"判断本章**明确兑现或解开**了哪几条（真相被揭示、承诺被履行、"
+            f"疑点被解释、埋下的人或物起了作用）。\n"
+            f"只是提到、只是继续铺垫、只是相关，都**不算**兑现。\n\n"
+            f"【伏笔清单】\n{listing}\n\n【第{n}章正文】\n{text[:4500]}\n\n"
+            f"只输出被兑现的编号，逗号分隔，如：2,7。一条都没有就输出：无")
+        try:
+            out = clean(call("polishing", prompt, max_tokens=120).text)
+        except Exception:
+            return 0
+        if "无" in out and not re.search(r"\d", out):
+            return 0
+        done_n = 0
+        for idx in re.findall(r"\d+", out)[:6]:
+            i = int(idx) - 1
+            if 0 <= i < len(cands):
+                self.p.mem.resolve_foreshadow(cands[i]["id"], n)
+                done_n += 1
+        return done_n
 
     def _l2(self, a: int, b: int):
         sm = self.p.state.get("summaries", {})

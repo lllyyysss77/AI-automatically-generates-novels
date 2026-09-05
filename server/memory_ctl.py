@@ -78,6 +78,13 @@ class MemoryController:
     def assemble(self, *, outline: str, resident: str, recent: List[str],
                  mid: List[str], recall: List[Dict[str, Any]],
                  constraints: str) -> Dict[str, Any]:
+        # 入参防呆 —— 变量遮蔽把 dict 列表传进 recent/mid 已经踩过两次,
+        # 报在 "\n".join 深处很难定位, 这里直接报清楚。
+        for nm, v in (("recent", recent), ("mid", mid)):
+            bad = [type(x).__name__ for x in (v or []) if not isinstance(x, str)]
+            if bad:
+                raise TypeError(f"assemble({nm}=...) 需要 List[str]，收到 {bad[:3]}"
+                                f"（多半是上游变量名被覆盖了）")
         self.results = []
 
         self.results.append(self._fit("L0_outline", outline))

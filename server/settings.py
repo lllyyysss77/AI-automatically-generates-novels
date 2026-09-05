@@ -21,7 +21,7 @@ DEFAULTS: Dict[str, Any] = {
                    "temperature_plan": 0.80},
     "limits": {"max_chapters": 500, "max_total_words": 2_000_000, "daily_call_budget": 0},
     "quality": {"audit_pass_score": 70, "max_rewrites": 1, "hard_fail_on_blacklist": True},
-    "memory": {"enabled": True, "top_k": 6, "recent_chapters": 3, "l2_every": 10,
+    "memory": {"enabled": True, "top_k": 20, "recent_chapters": 8, "recent_full": 4, "foreshadow_show": 24, "l2_every": 10,
                "index_chapters": True},
     "style_defaults": {"narration": "第三人称限制视角", "tense": "过去时", "extra": ""},
     "context_menus": [],
