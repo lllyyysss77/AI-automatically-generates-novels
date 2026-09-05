@@ -446,29 +446,32 @@ class Novelist:
             anchor["forbidden_people"] = REAL_PEOPLE
         return anchor
 
+    def alias_pair(self) -> Optional[tuple]:
+        """返回 (对外身份, 本名) —— 供状态抽取与约束共用。"""
+        cards = self.roster()
+        if not cards:
+            return None
+        head = cards[0]["card"]
+        m = re.search(r"姓名\s*[:：]\s*([^\n（(]{1,8})(?:[（(]\s*(?:原名|本名|真名)?\s*[:：]?\s*([^）)]{1,8})[）)])?", head)
+        if not m:
+            return None
+        a, b = m.group(1).strip(), (m.group(2) or "").strip()
+        if not b or a == b:
+            return None
+        title = self.p.meta.get("title", "")
+        # 书名里出现的那个是对外身份
+        return (b, a) if b in title else (a, b)
+
     def protagonist_alias(self) -> str:
         """主角本名与对外身份不一致时（穿越/重生/马甲/化名）必须钉死称谓规则。
 
         实测: 花名册第一条是「林远」, 但书里对外身份是「西门庆」,
         没有这条约束后文会两个名字乱用。
         """
-        cards = self.roster()
-        if not cards:
+        pair = self.alias_pair()
+        if not pair:
             return ""
-        head = cards[0]["card"]
-        m = re.search(r"姓名\s*[:：]\s*([^\n（(]{1,8})(?:[（(]\s*(?:原名|本名|真名)\s*[:：]?\s*([^）)]{1,8})[）)])?", head)
-        if not m:
-            return ""
-        outer, inner = m.group(1).strip(), (m.group(2) or "").strip()
-        title = self.p.meta.get("title", "")
-        if not inner:
-            # 书名里的名字与花名册首名不一致 -> 也按马甲处理
-            for cand in re.findall(r"[一-鿿]{2,3}", title):
-                if cand != outer and len(cand) >= 2 and cand in head:
-                    inner, outer = outer, cand
-                    break
-        if not inner or inner == outer:
-            return ""
+        outer, inner = pair
         return (f"【称谓锚定】主角对外身份是「{outer}」，本名/前世名是「{inner}」。"
                 f"叙述与他人称呼一律用「{outer}」；只有主角内心独白、"
                 f"或明确回忆前世时才可出现「{inner}」，且不得让旁人叫出这个名字。")
@@ -1111,12 +1114,18 @@ class Novelist:
         这些都是单章读起来没问题、连起来一定崩的东西。
         """
         names = [c["name"] for c in self.roster()][:14]
+        alias = self.alias_pair()
+        alias_note = (f"注意：「{alias[0]}」与「{alias[1]}」是同一个人，"
+                      f"角色状态一律记在「{alias[0]}」名下。\n" if alias else "")
         prompt = (
-            f"读下面这一章，抽取结构化信息。已知角色：{'、'.join(names) or '未知'}\n\n"
+            f"读下面这一章，抽取结构化信息。已知角色：{'、'.join(names) or '未知'}\n"
+            f"{alias_note}\n"
             f"严格按下面格式输出，没有内容的写「无」，不要任何多余文字：\n"
             f"摘要：（60 字以内一句话概括本章发生了什么）\n"
             f"时间：（本章相对上一章过了多久，如「当天下午」「三日后」）\n"
-            f"埋伏笔：（本章新埋下、尚未解释的线索，分号分隔，每条 20 字内）\n"
+            f"埋伏笔：（**只记真正的悬念**：被刻意隐藏、以后必须解开的东西，"
+            f"如身份秘密、可疑物证、未兑现的承诺、来历不明的人。"
+            f"人物性格描写、当前处境、已经讲明白的事都不算。最多 2 条，没有就写「无」）\n"
             f"收伏笔：（本章解开了之前埋的哪些线索，分号分隔）\n"
             f"角色状态：（格式 姓名=所在地/身体状态/关键持有物，分号分隔，只列本章出场的）\n\n"
             f"{text[:4000]}")
@@ -1149,8 +1158,12 @@ class Novelist:
         for item in [x.strip() for x in re.split(r"[;；]", field("角色状态")) if "=" in x]:
             name, _, val = item.partition("=")
             name = name.strip()
+            if alias and name == alias[1]:      # 别名归一, 免得主角被记成两个人
+                name = alias[0]
             if name:
                 roles[name] = {"at": n, "state": val.strip()[:80]}
+        if alias and alias[1] in roles and alias[0] in roles:
+            roles.pop(alias[1], None)
         self.p.save()
         return summary.replace("\n", " ")
 
