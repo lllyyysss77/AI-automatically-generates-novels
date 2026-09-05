@@ -25,7 +25,8 @@ from server.settings import load as load_settings, save as save_settings  # noqa
 from server.orchestrator import (Project, Novelist, create_project,        # noqa: E402
                                  slugify, call, PROJECTS)
 from server.exporters import EXPORTERS, MIME, EXT                 # noqa: E402
-from server.evaluator import audit                                # noqa: E402
+from server.evaluator import audit, book_audit, window_audit
+                                # noqa: E402
 
 WEB = ROOT / "web"
 app = Flask(__name__, static_folder=None)
@@ -165,7 +166,8 @@ def new_project():
     p = create_project(title=b.get("title", "未命名"), type_id=b.get("type_id", "novel"),
                        genre_id=b.get("genre_id", ""), style_id=b.get("style_id", ""),
                        target_chapters=chapters, target_words=words,
-                       fields=b.get("fields") or {})
+                       fields=b.get("fields") or {},
+                       history_mode=b.get("history_mode", "auto"))
     return jsonify({"slug": p.slug, **p.meta})
 
 
@@ -232,6 +234,51 @@ def context_report(slug: str, n: int):
     if not co:
         return jsonify({"error": f"第 {n} 章还没有细纲"}), 404
     return jsonify(Novelist(p).build_context(n, co)["report"])
+
+
+@app.get("/api/projects/<slug>/bookaudit")
+def book_audit_api(slug: str):
+    """全书体检 —— 单章合格不等于全书合格。"""
+    p = Project(slug)
+    done = sorted(p.state.get("done", []))
+    if not done:
+        return jsonify({"error": "还没有章节"}), 404
+    nv = Novelist(p)
+    chs = {n: p.chapter(n) for n in done}
+    anchor = nv.world_anchor()
+    names = [c["name"] for c in nv.roster()] or ["主角"]
+    return jsonify(book_audit(chs, characters=names,
+                              forbidden_terms=anchor.get("forbidden"),
+                              protagonist=names[0] if names else ""))
+
+
+@app.get("/api/projects/<slug>/window/<int:n>")
+def window_api(slug: str, n: int):
+    """邻章窗口体检 —— 本章和前后几章贴在一起看。"""
+    p = Project(slug)
+    done = sorted(p.state.get("done", []))
+    chs = {i: p.chapter(i) for i in done}
+    return jsonify(window_audit(chs, n, span=int(request.args.get("span", 3)),
+                                outlines=p._load("chapter_outlines.json", {})))
+
+
+@app.get("/api/search")
+def search_api():
+    """直接检索（框架内建的检索 provider，写作时会自动用到，这里只是手动入口）。"""
+    sr = registry.searcher(request.args.get("provider"))
+    if not sr.available():
+        return jsonify({"ok": False, "error": f"检索源 {sr.id} 不可用"}), 200
+    q = request.args.get("q", "")
+    return jsonify({"ok": True, "provider": sr.id, "query": q,
+                    "results": sr.search(q, k=int(request.args.get("k", 6)))})
+
+
+@app.get("/api/projects/<slug>/anchor")
+def anchor_api(slug: str):
+    nv = Novelist(Project(slug))
+    return jsonify({"anchor": nv.world_anchor(),
+                    "roster": [c["name"] for c in nv.roster()],
+                    "tic_guard": nv.tic_guard()})
 
 
 @app.get("/api/projects/<slug>/export")
@@ -302,6 +349,8 @@ def step(slug: str):
             elif what == "chapter_outlines":
                 nv.step_chapter_outlines(n or 1, int(b.get("count") or
                                                      p.cfg["generation"]["outline_batch"]), emit)
+            elif what == "repair":
+                nv.step_repair(emit)
             elif what == "chapter":
                 nv.step_chapter(n, emit)
             else:

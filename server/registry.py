@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 import yaml
 
 from .providers import PROVIDER_TYPES, BaseProvider
+from .providers.search import SEARCH_TYPES, BaseSearch, NullSearch
 
 
 def _load_dotenv() -> None:
@@ -69,6 +70,11 @@ class Registry:
         self.default_profile: str = cfg.get("default_profile", "drafting")
         self._providers: Dict[str, BaseProvider] = {}
 
+        sc = cfg.get("search") or {}
+        self.search_cfg: Dict[str, Any] = sc.get("providers") or {}
+        self.search_default: str = sc.get("default") or next(iter(self.search_cfg), "")
+        self._searchers: Dict[str, BaseSearch] = {}
+
         self.types = self._load_packs(PACKS / "type")
         self.genres = self._load_packs(PACKS / "genre")
         self.styles = self._load_packs(PACKS / "style")
@@ -94,6 +100,17 @@ class Registry:
             cls = PROVIDER_TYPES[cfg.get("type", "openai_compat")]
             self._providers[gateway_id] = cls(cfg)
         return self._providers[gateway_id]
+
+    def searcher(self, name: Optional[str] = None) -> BaseSearch:
+        """取检索 provider。未配置或不可用时返回空实现, 上层无需判空。"""
+        name = name or self.search_default
+        if not name or name not in self.search_cfg:
+            return NullSearch({})
+        if name not in self._searchers:
+            c = self.search_cfg[name]
+            cls = SEARCH_TYPES.get(c.get("type", "searxng"), NullSearch)
+            self._searchers[name] = cls(c)
+        return self._searchers[name]
 
     def resolve(self, profile: Optional[str] = None, **override) -> tuple[BaseProvider, Dict[str, Any]]:
         """按档位解析出 (provider, 调用参数)."""
@@ -125,6 +142,8 @@ class Registry:
                 for t in self.types.values()
             ],
             "genres": [{"id": g["id"], "name": g["name"]} for g in self.genres.values()],
+            "search": [{"id": k, "label": v.get("label", k), "type": v.get("type")}
+                       for k, v in self.search_cfg.items()],
             "styles": [{"id": s["id"], "name": s["name"]} for s in self.styles.values()],
         }
 

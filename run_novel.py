@@ -31,6 +31,7 @@ def cmd_init(a):
     p = create_project(
         title=a.title, type_id=a.type, genre_id=a.genre, style_id=a.style,
         target_chapters=chapters, target_words=a.words,
+        history_mode=a.history,
         fields={"premise": a.premise or a.title, "background": a.background or "",
                 "characters": "", "relationships": "", "kb": "", "style": a.extra or ""},
     )
@@ -104,6 +105,8 @@ if __name__ == "__main__":
     i.add_argument("--premise", default="")
     i.add_argument("--background", default="")
     i.add_argument("--extra", default="")
+    i.add_argument("--history", default="auto", choices=["auto","real","alt","none"],
+                   help="real=真实朝代(宋朝就叫宋朝) alt=架空(自造国号) none=与史无关")
 
     r = sub.add_parser("run"); r.set_defaults(f=cmd_run)
     r.add_argument("--title", required=True)

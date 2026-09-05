@@ -33,6 +33,18 @@ gateways:
     context_window: 128000
     max_tokens: 8192
 
+# 检索源 —— 与模型网关并列的一类 provider。加一家 = 加一段 YAML。
+# 写作时自动用于世界观/人物/剧情/正文的背景落地，不需要单独触发。
+search:
+  default: local_searxng
+  providers:
+    local_searxng:
+      type: searxng
+      label: "本地 SearXNG"
+      endpoint: ${NOVEL_SEARCH_URL:-http://127.0.0.1:18888}
+      lang: zh-CN
+      timeout: 20
+
 # 任务 -> 网关 的分层调度。创作类关思考（实测开思考挤爆 token 且不提质）
 profiles:
   planning:   {gateway: gw1, thinking: false, temperature: 0.80}

@@ -1,0 +1,152 @@
+"""提示词编译器 —— 把项目设定编译成网文作者真正在用的那种提示词。
+
+来源: 线上真实用户提交的生产提示词 (v5.2 日志)。相比"提示词工程腔"的长段落描述,
+实战里有效的是这几个手法, 全部在这里编译出来:
+
+  1. #标题 块状结构        模型对块状标记的遵守度远高于长段落
+  2. 人物资料卡 + [本章未出现] 标记   作者手动控场, 而不是让模型自己猜谁该出场
+  3. 正向词库 (尽量多使用)  只给黑名单模型会写得干巴; 给白名单才有网感
+  4. 【字数标记xx字】每 N 字一块   让模型自己数着写, 这是字数达标最有效的土办法
+  5. 编号剧情清单 剧情1..剧情N     细纲写成动作清单而非散文, 模型才不会跑偏
+  6. 明确的负面指令        "不要过度延申""不要在结尾进行总结"
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List, Optional
+
+
+def to_plot_list(outline: str) -> List[str]:
+    """把章节细纲规整成编号剧情清单。
+
+    细纲可能是散文、可能已经是列表、也可能是"核心事件：…"这种字段式,
+    统一拍平成一条条可执行的动作。
+    """
+    if not outline:
+        return []
+    # 已经是 剧情N: / 1. / - 形式
+    items = re.findall(r"^\s*(?:剧情\s*\d+\s*[:：]|[-*·]\s*|\d+[、.)]\s*)(.+)$",
+                       outline, re.M)
+    if len(items) >= 3:
+        return [re.sub(r"\s+", " ", x).strip() for x in items if len(x.strip()) > 4]
+
+    # 字段式: 抽出「核心事件 / 爽点 / 章末钩子」的内容
+    fields = re.findall(r"^\s*(?:核心事件|主要情节|爽点|冲突|章末钩子|结尾)\s*[:：]\s*(.+)$",
+                        outline, re.M)
+    out: List[str] = []
+    for f in fields:
+        out += [s.strip() for s in re.split(r"[；;。]\s*", f) if len(s.strip()) > 4]
+    if out:
+        return out
+
+    # 兜底: 按句号切
+    body = re.sub(r"^第\s*\d+\s*章.*$", "", outline, flags=re.M)
+    return [s.strip() for s in re.split(r"[。；\n]\s*", body) if len(s.strip()) > 6][:12]
+
+
+def cast_block(roster: List[Dict[str, str]], chapter_outline: str,
+               protagonist: str = "", max_cards: int = 16) -> str:
+    """人物资料卡 + [本章未出现] 标记。
+
+    全员都列出来 (让模型知道这个世界有谁), 但明确标注本章谁出场 ——
+    这样既不会凭空冒出新角色, 也不会把不该出场的人硬拉进来。
+    """
+    if not roster:
+        return ""
+    lines: List[str] = []
+    for c in roster[:max_cards]:
+        name = c.get("name", "")
+        if not name:
+            continue
+        digest = c.get("digest") or _digest(c.get("card", ""))
+        present = bool(name and name in chapter_outline) or name == protagonist
+        mark = "" if present else "[本章未出现]"
+        lines.append(f"{mark}{name}：{digest}")
+    return "\n".join(lines)
+
+
+def _digest(card: str, limit: int = 150) -> str:
+    """把多行角色卡压成一行 —— 真实提示词里人物卡都是一行一个。"""
+    parts = []
+    for key in ("身份", "年龄", "性格三词", "核心动机", "与主角关系",
+                "专属口头禅或说话习惯"):
+        m = re.search(rf"\*?\*?{key}\*?\*?\s*[:：]\s*([^\n]+)", card)
+        if m:
+            parts.append(m.group(1).strip().rstrip("。"))
+    s = "，".join(parts) if parts else re.sub(r"\s+", " ", card)
+    return s[:limit]
+
+
+def compile_chapter_prompt(*, title: str, index: int, target_words: int,
+                           genre_line: str, manner: str,
+                           background: str, world_digest: str,
+                           roster: List[Dict[str, str]], protagonist: str,
+                           relations: str, mainline: str,
+                           chapter_outline: str,
+                           positive: List[str], negative: List[str],
+                           constraints: str = "", memory: str = "",
+                           block_words: int = 500) -> str:
+    """编译单章正文提示词。"""
+    plots = to_plot_list(chapter_outline)
+    plot_block = "\n".join(f"剧情{i+1}：{p}" for i, p in enumerate(plots)) or chapter_outline
+    blocks = max(1, round(target_words / block_words))
+
+    seg: List[str] = []
+    seg.append(
+        f"你是一个{genre_line}网文作者，我希望根据我给你 #写作背景 #人物资料卡 #本章剧情 "
+        f"遵守规则创作{target_words}字左右的章节小说。"
+        f"写作手法需要{manner}，不要过度延申，不要在结尾进行总结，"
+        f"对于剧情中的内容在正文中需要用网文作者的口吻去描写，包括语言、行为、人物。"
+        f"每写满{block_words}字换一个大段落，并在该段开头标记【字数标记xx字】"
+        f"（xx 为累计字数），全章共约 {blocks} 块。")
+
+    if genre_line:
+        seg.append(f"\n#小说类型：{genre_line}")
+    if background:
+        seg.append(f"\n#写作背景\n{background.strip()}")
+    if world_digest:
+        seg.append(f"\n#世界观速览\n{world_digest.strip()}")
+
+    cb = cast_block(roster, chapter_outline, protagonist)
+    if cb:
+        seg.append(f"\n#人物资料卡（标注[本章未出现]的角色本章不得登场）\n{cb}")
+    if relations:
+        seg.append(f"\n#感情与关系线索\n{relations.strip()}")
+    if mainline:
+        seg.append(f"\n#主线剧情\n{mainline.strip()}")
+    if memory:
+        seg.append(f"\n#前情与记忆\n{memory.strip()}")
+    if constraints:
+        seg.append(f"\n#必守约束\n{constraints.strip()}")
+    if negative:
+        seg.append("\n#反向提示词库（禁止出现）\n" + "、".join(negative))
+    if positive:
+        seg.append("\n#正向提示词库（尽量多使用，写出网感）\n" + " ".join(positive))
+
+    seg.append(f"\n#本章剧情\n{plot_block}\n【剧情结束】")
+    seg.append("\n直接输出正文，不要任何前言、标题或说明。")
+    return "\n".join(seg)
+
+
+def compile_outline_prompt(*, title: str, start: int, count: int,
+                           genre_line: str, world_digest: str,
+                           roster_names: List[str], outline: str,
+                           prev_summary: str, constraints: str) -> str:
+    """编译分章细纲提示词 —— 输出编号剧情清单，而不是散文。"""
+    return (
+        f"你是{genre_line}的网文策划。为《{title}》写第 {start}-{start+count-1} 章的细纲。\n\n"
+        f"#总纲\n{outline}\n\n"
+        f"#世界观速览\n{world_digest}\n\n"
+        f"#可用角色（只能从中挑，不得凭空造人）\n{'、'.join(roster_names)}\n\n"
+        f"#前情\n{prev_summary}\n\n"
+        f"#必守约束\n{constraints}\n\n"
+        f"每章严格按下面格式输出，章与章之间用一行 ###fenge 分隔：\n\n"
+        f"第N章 章节名\n"
+        f"出场角色：（从可用角色里挑，至少 3 人，主角之外要有 2 个配角有戏）\n"
+        f"剧情1：（一个具体动作或事件，一句话）\n"
+        f"剧情2：…\n"
+        f"剧情3：…\n"
+        f"（每章 6-10 条剧情，要能直接照着写，不要写成概括）\n"
+        f"爽点：…\n"
+        f"章末钩子：…\n\n"
+        f"直接输出，无前言。")
