@@ -897,8 +897,7 @@ class Novelist:
                           for v in self.p._load("chapter_outlines.json", {}).values())
                          if m],
             plots_per_chapter=max(3, int(
-                (self.g["chapter_words_min"] + self.g["chapter_words_max"]) / 2
-                / (int(self.style.get("blockWords") or 500) * 0.8))))
+                self.target_words() / (int(self.style.get("blockWords") or 500) * 0.8))))
         # 细纲生成之前也要召回已确立的事实 —— 否则会写出自相矛盾的剧情。
         # 实测: 第 25 章把玉佩指向皇子赵琰, 第 33 章又说是东平府通判赵家之物,
         # 因为细纲生成压根没接记忆层, 模型看不到前面已经定死的结论。
@@ -939,7 +938,7 @@ class Novelist:
         if not co:
             raise RuntimeError(f"第 {n} 章没有细纲, 先跑 step_chapter_outlines")
 
-        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+        target = self.target_words()
         lvl = [l for l in self.type["levels"] if l["id"] in ("content", "page", "shot")][0]
 
         ctx = self.base_ctx()
@@ -1165,6 +1164,14 @@ class Novelist:
                   f"→ 守则 {len(guide)} 字")
         return {"book": ba, "window": wa, "guide": guide}
 
+    def target_words(self) -> int:
+        """单章目标字数。文风包声明了就用它 —— 番茄短章 2200-3000 与都市爽文
+        5000-6500 是两种节奏, 不该被同一个全局默认值压平。"""
+        cw = self.style.get("chapterWords")
+        if isinstance(cw, (list, tuple)) and len(cw) == 2:
+            return (int(cw[0]) + int(cw[1])) // 2
+        return (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+
     # ---------------- 逐章评审 ----------------
     def canon(self) -> List[Dict[str, Any]]:
         return self.p._load("canon.json", [])
@@ -1234,7 +1241,7 @@ class Novelist:
         co = self.p._load("chapter_outlines.json", {}).get(str(n), "")
         asm = self.build_context(n, co)
         L = asm["layers"]
-        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+        target = self.target_words()
         common = (f"【本章细纲】\n{co}\n\n【必守约束】\n{L.get('L5_constraint','')}\n\n"
                   f"【前情】\n{L.get('L2_recent','')}\n")
 
@@ -1297,7 +1304,7 @@ class Novelist:
         """
         done = sorted(self.p.state.get("done", []))
         bl = self.blacklist()
-        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+        target = self.target_words()
         ranked = []
         for n in done:
             t = self.p.chapter(n)
@@ -1416,7 +1423,7 @@ class Novelist:
                 f"{c['subject']}{c['fact']}(第{c['chapter']}章)" for c in recent_facts))
         guide = self.p.read("style_guide.md")
         rules = self.learned_rules()
-        target = (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
+        target = self.target_words()
 
         prompt = (
             "你是这套 AI 写作系统的架构师，正在做系统级自检。\n\n"
