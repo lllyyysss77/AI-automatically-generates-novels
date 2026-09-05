@@ -1,43 +1,83 @@
-banned_global:
-- 总而言之
-- 综上所述
-- 值得一提的是
+# 全局创作配置 —— 所有项目继承，单个项目可覆盖任意一项。
+# 优先级：项目 overrides > config/settings.local.yaml（UI 保存）> 本文件 > 代码内置默认
+# 注意：UI 的「全局设置」只写 settings.local.yaml，不会覆盖本文件的注释。
+
 generation:
-  chapter_words_max: 3000
-  chapter_words_min: 2200
-  chapter_words_tolerance: 0.25
-  context_budget: 0
-  max_context_budget: 100000
-  max_tokens_draft: 8192
+  chapter_words_min: 2200        # 单章字数下限
+  chapter_words_max: 3000        # 单章字数上限
+  chapter_words_tolerance: 0.25  # 允许偏离比例，超出计入扣分
+  outline_batch: 10              # 每批生成多少章细纲
+  max_tokens_draft: 8192         # 单次正文生成上限
   max_tokens_plan: 8000
-  min_context_budget: 32000
-  outline_batch: 10
-  output_reserve: 8192
-  safety_margin: 4000
+  context_budget: auto           # 记忆体预算。auto = 按网关窗口推导（窗口 - 输出预留 - 安全垫）
+  output_reserve: 8192           # 给正文输出留的 token
+  safety_margin: 4000            # 中文 token 估算误差的安全垫
+  min_context_budget: 32000      # 记忆体下限 —— 低于此值长篇一致性会崩
+  max_context_budget: 100000     # 记忆体上限 —— 再大边际收益递减且拖慢生成
   temperature_draft: 0.92
-  temperature_plan: 0.8
+  temperature_plan: 0.80
+
 limits:
-  daily_call_budget: 0
-  max_chapters: 500
-  max_total_words: 2000000
+  max_chapters: 500              # 单本书章节上限
+  max_total_words: 2000000       # 单本书总字数上限
+  daily_call_budget: 0           # 0 = 不限；达到后停止生成，用于成本控制
+
+quality:
+  audit_pass_score: 70           # 低于此分自动重写
+  max_rewrites: 1                # 每章最多重写次数
+  hard_fail_on_blacklist: true   # 命中题材黑名单直接判不合格
+  reflect_every: 5               # 每 N 章自审：读自己写的 → 批 → 更新写作守则，
+                                 # 同时抽出机器可执行规则（禁用词/口癖/断线角色）自动生效
+  selfcheck_every: 20            # 每 N 章系统级自检：区分内容问题与系统缺陷
+                                 # （漏检/误报/约束失效/配额错误），产出 SYSTEM_ISSUES.md
+
 memory:
   enabled: true
-  index_chapters: true
-  l2_every: 10
+  top_k: 6                       # 每次写作检索多少条相关记忆
+  recent_chapters: 3             # 直接带入的最近章节摘要数
+  l2_every: 10                   # 每 N 章压一次 L2 摘要
+  index_chapters: true           # 正文入索引（支持「第 30 章埋的伏笔」检索）
+  web_search: true               # L4 召回是否联网补事实
+  web_max_per_chapter: 4         # 单章最多补几个知识点，查过的全书复用
+  # 五层记忆的预算配比（占 context_budget 的比例，合计建议 <= 0.96）
+  #   改这里就能控制「模型记住什么」：想更贴合远期伏笔就加大 L4_recall，
+  #   想更贴紧最近剧情就加大 L2_recent。
   layers:
-    L0_outline: 0.1
-    L1_resident: 0.22
-    L2_recent: 0.2
-    L3_mid: 0.16
-    L4_recall: 0.2
-    L5_constraint: 0.08
-  recent_chapters: 3
-  top_k: 6
-quality:
-  audit_pass_score: 70
-  hard_fail_on_blacklist: true
-  max_rewrites: 1
-style_defaults:
-  extra: ''
-  narration: 第三人称限制视角
-  tense: 过去时
+    L0_outline: 0.10             # 本章细纲（必进，永不裁剪）
+    L1_resident: 0.22            # 世界观 + 考据卡 + 本章出场角色卡（常驻）
+    L2_recent: 0.20              # 最近章节摘要（滑窗，超预算丢最旧）
+    L3_mid: 0.16                 # 每 N 章的段摘要（分层压缩，丢最远）
+    L4_recall: 0.20              # 检索召回（内部 FTS5 + 外部搜索合并）
+    L5_constraint: 0.08          # 红线约束（必进，永不裁剪）
+
+style_defaults:                  # 全局写作偏好，会拼进每次提示词
+  narration: "第三人称限制视角"
+  tense: "过去时"
+  extra: ""                      # 自定义追加要求，例如「多用短句，少用比喻」
+
+# 全局右键菜单 —— 选中正文右键即可用，对所有项目、所有内容类型生效。
+# 合并顺序：全局（这里）> 内容类型包 > 题材包；同名以先出现的为准。
+# 可用变量：${selected_text} ${background} ${characters} ${relationships}
+#           ${plot} ${style} ${cliche_blacklist} ${title}
+context_menus:
+  - name: 扩写
+    prompt: "把下面这段扩写到原来的 1.5 倍，增加细节与画面感，风格保持一致，直接输出改写结果：\n${selected_text}"
+  - name: 缩写
+    prompt: "把下面这段压缩到原来的 60%，保留全部关键信息与转折，直接输出：\n${selected_text}"
+  - name: 润色
+    prompt: "润色下面这段，语言更凝练有力，保留全部剧情，直接输出：\n${selected_text}"
+  - name: 去 AI 味
+    prompt: "改写下面这段，去掉套话与 AI 腔（禁用：${cliche_blacklist}），句式长短交错，直接输出：\n${selected_text}"
+  - name: 加冲突
+    prompt: "在下面这段中升级戏剧冲突，保持合理性，直接输出：\n${selected_text}"
+  - name: 加钩子
+    prompt: "改写下面这段的结尾，留一个让读者必须看下一章的钩子，直接输出：\n${selected_text}"
+  - name: 转对白
+    prompt: "把下面这段的叙述改写成人物对白推动，人物说话要有各自腔调，直接输出：\n${selected_text}"
+  - name: 加细节
+    prompt: "为下面这段补充可感知的细节（气味、触感、声音、光线），不加新情节，直接输出：\n${selected_text}"
+
+banned_global:                   # 全局禁用词，与题材黑名单、自审学到的规则合并
+  - "总而言之"
+  - "综上所述"
+  - "值得一提的是"

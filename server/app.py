@@ -166,6 +166,7 @@ def catalog():
         p.stem: json.loads(p.read_text(encoding="utf-8"))
         for p in (ROOT / "packs" / "shortcuts").glob("*.json")
     } if (ROOT / "packs" / "shortcuts").exists() else {}
+    c["context_menus"] = load_settings().get("context_menus") or []
     return jsonify(c)
 
 

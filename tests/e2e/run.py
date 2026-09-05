@@ -287,7 +287,38 @@ def c16(page):
         assert d.get("error"), "不可用时应给出原因"
 
 
-CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16]
+@case(17, "全局右键菜单可配置且保存不毁配置文件注释")
+def c17(page):
+    import subprocess
+    before = subprocess.run(["grep", "-c", "^ *#", "config/settings.yaml"],
+                            capture_output=True, text=True).stdout.strip()
+    page.goto(BASE, wait_until="networkidle")
+    page.click('.nav-item[data-view="settings"]')
+    page.wait_for_selector("#cm-list", timeout=15000)
+    n0 = page.locator("#cm-list [data-i]").count()
+    assert n0 >= 5, f"全局右键菜单过少: {n0}"
+    page.click("#cm-add")
+    page.wait_for_timeout(400)
+    assert page.locator("#cm-list [data-i]").count() == n0 + 1, "新增未生效"
+    # 记忆体预算必须仍是 auto，不能被数字表单冲掉
+    assert page.input_value("#g-ctx").strip().lower() == "auto", \
+        f"context_budget 被冲成了 {page.input_value('#g-ctx')!r}"
+    page.click("#st-save")
+    page.wait_for_selector(".toast", timeout=10000)
+    after = subprocess.run(["grep", "-c", "^ *#", "config/settings.yaml"],
+                           capture_output=True, text=True).stdout.strip()
+    assert before == after, f"保存把 settings.yaml 的注释冲掉了 ({before} -> {after})"
+    shot(page, "17-global-menus")
+    # 还原
+    page.reload(wait_until="networkidle")
+    page.click('.nav-item[data-view="settings"]')
+    page.wait_for_selector("#cm-list [data-i]", timeout=15000)
+    page.locator(".cm-del").last.click()
+    page.click("#st-save")
+    page.wait_for_timeout(800)
+
+
+CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17]
 
 
 def main():

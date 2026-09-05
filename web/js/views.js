@@ -413,16 +413,23 @@ async function saveChapter() {
      ③ 通用兜底项
    改写结果可「替换选中」直接写回正文 —— 这是老版的核心交互, 必须保留. */
 function menuItems() {
+  // 三层合并，同名以先出现的为准：
+  //   ① 全局设置 config/settings.yaml -> context_menus（用户可随时改，对所有项目生效）
+  //   ② 内容类型包 packs/type/*.json 的 menus（小说/剧本/短剧各有专属指令）
+  //   ③ 题材包 v5.2 legacy-genre-menus（130 条老资产，按题材匹配）
   const t = S.catalog.typeDetail[S.cur.meta.type_id] || {};
   const lvl = (t.levels||[]).slice(-1)[0] || {};
-  let items = ((t.menus||{})[lvl.id] || []).slice();
   const legacy = (S.catalog.shortcuts||{})['legacy-genre-menus'];
   const gname = (S.catalog.genres.find(g=>g.id===S.cur.meta.genre_id)||{}).name;
-  if (legacy && legacy.menus) {
-    const pool = legacy.menus[gname] || [];
-    const seen = new Set(items.map(i=>i.name));
-    pool.forEach(i => { if (!seen.has(i.name)) { items.push(i); seen.add(i.name); } });
-  }
+  const layers = [
+    S.catalog.context_menus || [],
+    (t.menus||{})[lvl.id] || [],
+    (legacy && legacy.menus && legacy.menus[gname]) || [],
+  ];
+  const seen = new Set(), items = [];
+  for (const layer of layers)
+    for (const i of layer)
+      if (i && i.name && i.prompt && !seen.has(i.name)) { seen.add(i.name); items.push(i); }
   return items;
 }
 
@@ -519,7 +526,9 @@ const SettingsView = {
           ${num('l-w','单本总字数上限',l.max_total_words)}</div></div>
       <div class="card"><div class="card-head"><div class="card-title">生成参数</div></div>
         <div class="row">${num('g-batch','每批细纲章数',g.outline_batch)}
-          ${num('g-ctx','上下文预算 (token)',g.context_budget,'留足输出空间，勿超模型窗口')}</div>
+          <div class="field"><label>记忆体预算 (token)</label>
+          <input class="input" id="g-ctx" value="${esc(String(g.context_budget))}">
+          <div class="hint">填 <code>auto</code> 按网关窗口自动推导；或填数字。限定 ${fmtNum(g.min_context_budget)}–${fmtNum(g.max_context_budget)}</div></div></div>
         <div class="row">${num('g-td','正文温度',g.temperature_draft)}
           ${num('g-tp','规划温度',g.temperature_plan)}</div></div>
       <div class="card"><div class="card-head"><div class="card-title">质量闸</div></div>
@@ -529,6 +538,13 @@ const SettingsView = {
         <div class="row">${num('m-k','每次召回条数',m.top_k)}
           ${num('m-rec','带入最近章节摘要数',m.recent_chapters)}
           ${num('m-l2','每 N 章压缩一次摘要',m.l2_every)}</div></div>
+      <div class="card"><div class="card-head"><div class="card-title">右键菜单</div>
+        <div class="card-sub">选中正文右键即可用，对所有项目生效；与内容类型包、题材包合并（同名以此处为准）</div>
+        <div class="card-actions"><button class="btn btn-sm" id="cm-add">＋ 新增</button></div></div>
+        <div id="cm-list"></div>
+        <div class="card-sub" style="margin-top:10px">可用变量：
+          <code>\${selected_text}</code> <code>\${background}</code> <code>\${characters}</code>
+          <code>\${relationships}</code> <code>\${cliche_blacklist}</code></div></div>
       <div class="card"><div class="card-head"><div class="card-title">统一写作偏好</div>
         <div class="card-sub">会拼进每一次生成的提示词</div></div>
         <div class="row">
@@ -540,11 +556,43 @@ const SettingsView = {
           <textarea class="ta" id="s-ban">${esc((s.banned_global||[]).join('\n'))}</textarea></div></div>`;
   },
   mount() {
+    const renderMenus = () => {
+      const list = S.settings.context_menus || [];
+      $('#cm-list').innerHTML = list.length ? list.map((m,i)=>`
+        <div class="card" style="box-shadow:none;padding:12px;margin-top:8px" data-i="${i}">
+          <div class="row" style="align-items:flex-end;gap:8px">
+            <div class="field" style="margin:0;flex:0 0 150px"><label>菜单名</label>
+              <input class="input cm-name" value="${esc(m.name||'')}"></div>
+            <button class="btn btn-sm btn-danger cm-del" style="flex:0 0 auto;margin-bottom:0">删除</button>
+          </div>
+          <div class="field" style="margin:8px 0 0"><label>提示词</label>
+            <textarea class="ta cm-prompt" style="min-height:62px">${esc(m.prompt||'')}</textarea></div>
+        </div>`).join('') : '<div class="card-sub">暂无，点右上角新增</div>';
+      $$('.cm-del').forEach(b => b.onclick = () => {
+        S.settings.context_menus.splice(+b.closest('[data-i]').dataset.i, 1);
+        renderMenus();
+      });
+    };
+    const collectMenus = () => $$('#cm-list [data-i]').map(el => ({
+      name: $('.cm-name', el).value.trim(),
+      prompt: $('.cm-prompt', el).value.trim(),
+    })).filter(m => m.name && m.prompt);
+    S.settings.context_menus = S.settings.context_menus || [];
+    renderMenus();
+    $('#cm-add').onclick = () => {
+      S.settings.context_menus = collectMenus();
+      S.settings.context_menus.push({name:'新菜单',
+        prompt:'改写下面这段，直接输出：\n' + '$' + '{selected_text}'});
+      renderMenus();
+    };
+
     $('#st-save').onclick = async () => {
       const s = JSON.parse(JSON.stringify(S.settings));
       const v = id => +$(id).value;
       Object.assign(s.generation, {chapter_words_min:v('#g-min'), chapter_words_max:v('#g-max'),
-        outline_batch:v('#g-batch'), context_budget:v('#g-ctx'),
+        outline_batch:v('#g-batch'),
+        context_budget: ($('#g-ctx').value.trim().toLowerCase() === 'auto'
+                         ? 'auto' : (+$('#g-ctx').value || 'auto')),
         temperature_draft:v('#g-td'), temperature_plan:v('#g-tp')});
       Object.assign(s.limits, {max_chapters:v('#l-ch'), max_total_words:v('#l-w')});
       Object.assign(s.quality, {audit_pass_score:v('#q-pass'), max_rewrites:v('#q-rw')});
@@ -552,7 +600,10 @@ const SettingsView = {
       Object.assign(s.style_defaults, {narration:$('#s-nar').value, tense:$('#s-tense').value,
         extra:$('#s-extra').value});
       s.banned_global = $('#s-ban').value.split('\n').map(x=>x.trim()).filter(Boolean);
-      await API.saveSettings(s); toast('设置已保存，对所有项目生效', 'ok');
+      s.context_menus = collectMenus();
+      await API.saveSettings(s);
+      S.catalog = await API.catalog();          // 右键菜单立刻生效，不用刷新
+      toast(`设置已保存（右键菜单 ${s.context_menus.length} 条），对所有项目生效`, 'ok');
     };
   }
 };
