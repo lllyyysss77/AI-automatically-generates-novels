@@ -1,0 +1,43 @@
+banned_global:
+- 总而言之
+- 综上所述
+- 值得一提的是
+generation:
+  chapter_words_max: 3000
+  chapter_words_min: 2200
+  chapter_words_tolerance: 0.25
+  context_budget: 0
+  max_context_budget: 100000
+  max_tokens_draft: 8192
+  max_tokens_plan: 8000
+  min_context_budget: 32000
+  outline_batch: 10
+  output_reserve: 8192
+  safety_margin: 4000
+  temperature_draft: 0.92
+  temperature_plan: 0.8
+limits:
+  daily_call_budget: 0
+  max_chapters: 500
+  max_total_words: 2000000
+memory:
+  enabled: true
+  index_chapters: true
+  l2_every: 10
+  layers:
+    L0_outline: 0.1
+    L1_resident: 0.22
+    L2_recent: 0.2
+    L3_mid: 0.16
+    L4_recall: 0.2
+    L5_constraint: 0.08
+  recent_chapters: 3
+  top_k: 6
+quality:
+  audit_pass_score: 70
+  hard_fail_on_blacklist: true
+  max_rewrites: 1
+style_defaults:
+  extra: ''
+  narration: 第三人称限制视角
+  tense: 过去时

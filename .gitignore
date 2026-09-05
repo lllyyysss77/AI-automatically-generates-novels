@@ -1,0 +1,28 @@
+# 密钥与端点 —— 绝不进 git
+.env
+.env.local
+config/providers.local.yaml
+
+# 运行产物
+projects/
+reports/
+*.db
+*.sqlite
+nohup.out
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 测试产物
+tests/e2e/screenshots/
+tests/e2e/trace/
+
+# 编辑器
+.DS_Store
+.idea/
+.vscode/
