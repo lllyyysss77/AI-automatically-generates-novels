@@ -81,6 +81,7 @@ def _digest(card: str, limit: int = 150) -> str:
 
 def compile_chapter_prompt(*, title: str, index: int, target_words: int,
                            genre_line: str, manner: str, alias_rule: str = "",
+                           style_pack: Optional[Dict[str, Any]] = None,
                            background: str, world_digest: str,
                            roster: List[Dict[str, str]], protagonist: str,
                            relations: str, mainline: str,
@@ -114,6 +115,20 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
     # 实测第 11 章「西门庆」0 次而「林远」25 次。
     if alias_rule:
         seg.append("\n⚠️ " + alias_rule)
+    # 写法纪律来自文风包 —— 每种文风有自己的开篇规则与描写配给, 不硬编码在引擎里
+    sp = style_pack or {}
+    op = sp.get("opening") or {}
+    if op:
+        seg.append("\n⚠️ 【开篇铁律】" + op.get("rule", "")
+                   + "。" + op.get("forbid", "")
+                   + (f"\n  正例：{'；'.join(op.get('good', [])[:2])}" if op.get("good") else "")
+                   + (f"\n  反例（禁止）：{'；'.join(op.get('bad', [])[:2])}" if op.get("bad") else ""))
+    db = sp.get("descriptionBudget") or {}
+    if db.get("note"):
+        seg.append("⚠️ 【描写配给】" + db["note"])
+    ta = (sp.get("transitionAvoid") or {}).get("words")
+    if ta:
+        seg.append("【少用这些过渡与抒情词】" + "、".join(ta))
 
     if genre_line:
         seg.append(f"\n#小说类型：{genre_line}")

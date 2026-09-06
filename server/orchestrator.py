@@ -668,12 +668,6 @@ class Novelist:
         tg = self.tic_guard()
         if tg:
             cons.append("【口癖抑制】" + tg)
-        cons.append("【开篇铁律】第一句必须是对白、动作或突发事件，"
-                    "禁止用地点/光线/气味/天气开场（「日光灯管滋滋作响」"
-                    "「空气里弥漫着…的味道」这类三件套一律不要）。")
-        cons.append("【形容词配给】情绪形容词（冰冷/深邃/压抑/刺耳…）每千字最多 2 个，"
-                    "比喻句每千字最多 1 个。环境描写全章合计不超过 3 处、"
-                    "每处不超过 1 句，用具体名词而不是形容词堆砌。")
         cons.append("【配角配额】本章除主角外至少让 2 个配角有独立台词与动作，"
                     "配角不能只当背景板；不得给已知人物随意安排与其身份不符的官职。")
         bl = self.blacklist()
@@ -990,13 +984,14 @@ class Novelist:
             background=f.get("background", ""),
             world_digest=L["L1_resident"][:4000],
             alias_rule=self.protagonist_alias(),
+            style_pack=st,
             roster=rost, protagonist=((self.alias_pair() or [None])[0]
                                       or (rost[0]["name"] if rost else "")),
             relations=f.get("relationships", ""),
             mainline=self.p.read("outline.md")[:1500],
             chapter_outline=co,
             positive=st.get("positive", []),
-            negative=list(dict.fromkeys(self.blacklist() + (st.get("banned") or []))),
+            negative=self.blacklist(),
             constraints=L.get("L5_constraint", ""),
             memory=ctx.get("prev_summary", "")[:6000],
             block_words=int(st.get("blockWords") or 500),
