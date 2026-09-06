@@ -317,9 +317,21 @@ class Novelist:
             out.append(f"[{c['category']}] 禁：" + "；".join(c["avoid"][:3]))
         return "\n".join(out)
 
+    def hard_blacklist(self) -> List[str]:
+        """验收用: 只有穿帮词（真朝代/真实人物/自审判定的 hard）即中即扣。
+        「冷笑」「深吸一口气」这类套话由 CLICHE_PATTERNS 做密度检测,
+        出现 1 次就扣 15 分是误伤(实测第 117 章因此被砸到 25 分)。"""
+        a = self.world_anchor()
+        out = list(a.get("forbidden") or []) + list(a.get("forbidden_people") or [])
+        out += self.learned_rules().get("forbidden_terms", [])
+        return list(dict.fromkeys([w for w in out if w]))
+
     def blacklist(self) -> List[str]:
         bl = list(self.genre.get("clicheBlacklist", []))
-        bl += self.style.get("banned", [])
+        # 文风包 banned 是「反向提示词」（写作时少用的倾向词, 如「然后/坚定/温暖」),
+        # 不是验收黑名单。实测把它塞进 audit 的即中即扣后, 6700 字的章因为一个
+        # 「然后」被扣 15 分, 8 个日常词直接把规则分打到 0, 触发无谓重写。
+        # banned 只进提示词引导(见 compile_chapter_prompt 的 negative), 不参与验收。
         bl += self.cfg.get("banned_global", []) or []
         from .evaluator import DEFAULT_TICS
         bl += DEFAULT_TICS                    # 冷启动就设防, 不等统计攒够
@@ -585,7 +597,12 @@ class Novelist:
         recent = [f"第{i}章：{sm[str(i)]}" for i in range(max(1, n - k), n) if str(i) in sm]
         # 只给一句话摘要, 模型接不住前文的文风、称谓、场景细节。
         # 窗口有近 10 万 token 而实测只用了 20%, 完全装得下最近几章原文。
+        # 单章越长, 带的原文章数要越少, 否则 L2 必然溢出(实测 5750 字的书带 4 章
+        # 原文直接把 30% 配额撑爆)
         full_k = int(self.mcfg.get("recent_full", 2) or 0)
+        tw = self.target_words()
+        if tw > 4000:
+            full_k = max(1, full_k // 2)
         for i in range(max(1, n - full_k), n):
             body = self.p.chapter(i)
             if body:
@@ -651,6 +668,12 @@ class Novelist:
         tg = self.tic_guard()
         if tg:
             cons.append("【口癖抑制】" + tg)
+        cons.append("【开篇铁律】第一句必须是对白、动作或突发事件，"
+                    "禁止用地点/光线/气味/天气开场（「日光灯管滋滋作响」"
+                    "「空气里弥漫着…的味道」这类三件套一律不要）。")
+        cons.append("【形容词配给】情绪形容词（冰冷/深邃/压抑/刺耳…）每千字最多 2 个，"
+                    "比喻句每千字最多 1 个。环境描写全章合计不超过 3 处、"
+                    "每处不超过 1 句，用具体名词而不是形容词堆砌。")
         cons.append("【配角配额】本章除主角外至少让 2 个配角有独立台词与动作，"
                     "配角不能只当背景板；不得给已知人物随意安排与其身份不符的官职。")
         bl = self.blacklist()
@@ -973,21 +996,21 @@ class Novelist:
             mainline=self.p.read("outline.md")[:1500],
             chapter_outline=co,
             positive=st.get("positive", []),
-            negative=self.blacklist(),
+            negative=list(dict.fromkeys(self.blacklist() + (st.get("banned") or []))),
             constraints=L.get("L5_constraint", ""),
             memory=ctx.get("prev_summary", "")[:6000],
             block_words=int(st.get("blockWords") or 500),
         )
         self.p.write(f"audit/{n:03d}.prompt.txt", prompt)
-        # 按目标字数推导 max_tokens 做硬上限 —— 8192 太宽松, 实测普遍超 10~50%。
-        # 中文约 1 字 1.4 token, 留 1.25 倍余量给标点与收尾。
-        cap = min(self.g["max_tokens_draft"], int(target / 0.7 * 1.25))
+        # 按目标字数推导 max_tokens 硬上限。之前按 1 字≈1.43 token 估算, 对 Qwen
+        # 中文严重高估(实际约 0.75 token/汉字), 于是上限根本不起作用, 章章超长。
+        cap = min(self.g["max_tokens_draft"], int(target * 0.75 * 1.25))
         r = call("drafting", prompt, on_delta, max_tokens=cap)
         # 去掉模型输出里的【字数标记】—— 它只是写作时的计数脚手架, 不进成稿
         r.text = re.sub(r"【字数标记[^】]*】\s*", "", r.text)
         text = clean(r.text)
 
-        a = audit(text, extra_blacklist=self.blacklist(), target_words=target,
+        a = audit(text, extra_blacklist=self.hard_blacklist(), target_words=target,
                   check_modern=self.history_mode() in ("real", "alt"))
         pos = st.get("positive", [])
         if pos:
@@ -1015,9 +1038,15 @@ class Novelist:
             r2 = call("polishing", fix, on_delta, max_tokens=8192)
             t2 = clean(r2.text)
             a2 = audit(t2, extra_blacklist=self.blacklist(), target_words=target)
-            if t2 and a2["score"] > a["score"]:
+            # 长度守卫 —— 重写只为改语言, 内容大幅缩水说明模型把剧情写丢了。
+            # 实测新书第 5 章原稿正常, 重写只剩 1231 字(目标 5750)却因为分数高被采纳。
+            too_short = len(re.findall(r"[一-鿿]", t2)) < max(
+                int(target * 0.6), int(a["stats"]["cn"] * 0.6))
+            if t2 and a2["score"] > a["score"] and not too_short:
                 text, a = t2, a2
                 a["rewritten"] = True
+            elif t2 and too_short:
+                self._log(f"第{n}章重写结果过短({len(re.findall(chr(0x4e00)+'-'+chr(0x9fff), t2))}字)，弃用")
 
         self.p.write(self.p.chapter_path(n), text)
         self.p.write(f"audit/{n:03d}.json", json.dumps(a, ensure_ascii=False, indent=2))

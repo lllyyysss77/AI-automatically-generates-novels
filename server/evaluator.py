@@ -65,6 +65,13 @@ MODERN_TERMS: Dict[str, str] = {
 }
 
 
+# 情绪/感官形容词 —— 单个无害, 密度高了就是「文学腔糊墙」
+MOOD_ADJ = re.compile(
+    r"冰冷|冷硬|昏黄|斑驳|粘稠|黏腻|刺耳|尖锐|凌乱|颤抖|苍白|灰败|深邃|锐利"
+    r"|阴鸷|压抑|窒息|沙哑|干涩|潮湿|酸腐|惨白|刺鼻|浑浊|滚烫|冰凉|燥热")
+ENV_OPEN = re.compile(r"灯|光|味|声|风|雨|雾|影|墙|窗|尘|空气|阳光|热浪|气息")
+
+
 def cn_len(t: str) -> int:
     return len(re.findall(r"[一-鿿]", t))
 
@@ -104,6 +111,26 @@ def audit(text: str, extra_blacklist: List[str] | None = None,
                        "per_1k": round(per_k(sum(pat_hits.values())), 2),
                        "samples": [f"{k}×{v}" for k, v in
                                    sorted(pat_hits.items(), key=lambda x: -x[1])[:5]]})
+
+    # 3.3 环境铺陈开篇 —— 「地点+光线+气味」三件套是开局杀手(novel-common 红线第一条)
+    head = text.strip()[:150]
+    if ("“" not in head and '"' not in head and ENV_OPEN.search(head[:60])
+            and len(re.findall(r"[一-鿿]", head)) > 60):
+        issues.append({"level": "mid", "type": "环境铺陈开篇",
+                       "detail": head[:50] + "…（应以对白/动作/事件开场）"})
+
+    # 3.4 感官形容词密度
+    mood = len(MOOD_ADJ.findall(text))
+    if per_k(mood) > 2.5:
+        issues.append({"level": "mid", "type": "情绪形容词过密",
+                       "count": mood, "per_1k": round(per_k(mood), 1),
+                       "samples": list(dict.fromkeys(MOOD_ADJ.findall(text)))[:6]})
+
+    # 3.45 比喻密度
+    simile = len(re.findall(r"像[^。，]{2,18}[。，]|如同|仿佛|宛如", text))
+    if per_k(simile) > 1.8:
+        issues.append({"level": "low", "type": "比喻过密",
+                       "count": simile, "per_1k": round(per_k(simile), 1)})
 
     # 3.5 现代词泄漏 (历史/架空题材)
     if check_modern:
@@ -200,14 +227,18 @@ def book_audit(chapters: Dict[int, str], *, characters: List[str] | None = None,
     issues: List[Dict[str, Any]] = []
 
     # 1 套话的全书频次
+    # 用密度而非绝对次数 —— 绝对次数不随篇幅缩放, 54 万字的书必然次次报「泛滥」,
+    # 而「冷笑」119 次 / 54 万字 = 2.2 每万字, 密度其实正常。
     tics = []
     for pat, name in CLICHE_PATTERNS:
         c = len(re.findall(pat, allt))
-        if c >= 8:
-            tics.append({"tic": name, "count": c, "per_10k": per_10k(c)})
-    tics.sort(key=lambda x: -x["count"])
+        d = per_10k(c)
+        if c >= 8 and d >= 1.5:
+            tics.append({"tic": name, "count": c, "per_10k": d})
+    tics.sort(key=lambda x: -x["per_10k"])
     if tics:
-        issues.append({"level": "high" if tics[0]["count"] >= 25 else "mid",
+        worst = tics[0]["per_10k"]
+        issues.append({"level": "high" if worst >= 4 else "mid" if worst >= 2.5 else "low",
                        "type": "口癖泛滥", "detail": tics[:8]})
 
     # 2 世界观术语冲突 (架空却用真朝代名之类)
