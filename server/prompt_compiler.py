@@ -82,6 +82,7 @@ def _digest(card: str, limit: int = 150) -> str:
 def compile_chapter_prompt(*, title: str, index: int, target_words: int,
                            genre_line: str, manner: str, alias_rule: str = "",
                            style_pack: Optional[Dict[str, Any]] = None,
+                           extra_directive: str = "",
                            background: str, world_digest: str,
                            roster: List[Dict[str, str]], protagonist: str,
                            relations: str, mainline: str,
@@ -129,6 +130,8 @@ def compile_chapter_prompt(*, title: str, index: int, target_words: int,
     ta = (sp.get("transitionAvoid") or {}).get("words")
     if ta:
         seg.append("【少用这些过渡与抒情词】" + "、".join(ta))
+    if extra_directive:
+        seg.append("⚠️ 【本书追加指令（用户自定义，优先级最高）】" + extra_directive)
 
     if genre_line:
         seg.append(f"\n#小说类型：{genre_line}")

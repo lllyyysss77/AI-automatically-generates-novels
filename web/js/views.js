@@ -103,14 +103,18 @@ function newProjectModal() {
 
 /* ─────────────────────────── 项目详情 ─────────────────────────── */
 const TABS = [['overview','概览'],['setup','设定'],['outline','大纲'],
-              ['chapters','章节'],['quality','质检'],['memory','记忆'],
-              ['teardown','拆书'],['export','导出']];
+              ['chapters','章节'],['prompts','提示词'],['quality','质检'],
+              ['memory','记忆'],['teardown','拆书'],['export','导出']];
 
 const ProjectView = {
   title: () => S.cur ? S.cur.meta.title : '项目',
   actions() {
-    const running = S.cur && S.cur.job && S.cur.job.running;
+    const j = (S.cur && S.cur.job) || {};
+    const running = j.running;
+    const waiting = j.waiting;
     return `<span class="badge badge-neutral" id="model-badge">${esc((S.cur&&S.cur.meta.model)||'')}</span>
+      ${waiting ? `<span class="badge badge-warn">${esc(j.stage||'待审阅')}</span>
+        <button class="btn btn-primary" id="a-resume">✓ 审阅完毕，继续</button>` : ''}
       <button class="btn ${running?'btn-danger':'btn-primary'}" id="a-auto">
         ${running?'■ 停止':'▶ 自动创作'}</button>`;
   },
@@ -123,9 +127,41 @@ const ProjectView = {
   mount() {
     $$('.tab').forEach(t => t.onclick = () => { S.tab = t.dataset.tab; render(); });
     const a = $('#a-auto'); if (a) a.onclick = toggleAuto;
+    const rs = $('#a-resume'); if (rs) rs.onclick = async () => {
+      const j = S.cur.job || {};
+      await API.auto(S.cur.slug, {upto: j.upto || S.cur.meta.target_chapters, mode: 'staged'});
+      toast('继续下一阶段', 'ok'); startPoll();
+    };
     TabMount[S.tab] && TabMount[S.tab]();
   }
 };
+
+/* 可编辑文档卡片: 世界观/角色/总纲/守则/时代卡 通用 */
+function editableDoc(docKey, title, text, extra='') {
+  return `<div class="card"><div class="card-head"><div class="card-title">${title}</div>
+      <div class="card-sub">${(text||'').length} 字 · 可直接编辑</div>
+      <div class="card-actions">${extra}
+        <button class="btn btn-sm btn-primary doc-save" data-doc="${docKey}">保存</button></div></div>
+      <textarea class="ta doc-edit" data-doc="${docKey}"
+        style="min-height:260px;max-height:460px;font-size:13.5px;line-height:1.8"
+        placeholder="尚未生成，可点上方按钮生成，或直接手写">${esc(text||'')}</textarea></div>`;
+}
+function bindDocSaves() {
+  $$('.doc-save').forEach(b => b.onclick = async () => {
+    const k = b.dataset.doc;
+    const ta = $(`.doc-edit[data-doc="${k}"]`);
+    b.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(S.cur.slug)}/doc/${k}`,
+        {method:'PUT', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({text: ta.value})});
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      toast(`已保存${d.indexed?`，重建索引 ${d.indexed} 条`:''}`, 'ok');
+    } catch(e) { toast('保存失败：'+e.message, 'err'); }
+    b.disabled = false;
+  });
+}
 
 const TabRender = {
   overview(p) {
@@ -150,31 +186,33 @@ const TabRender = {
     const f = p.meta.fields || {};
     return `<div class="card"><div class="card-head"><div class="card-title">基础设定</div>
         <div class="card-actions">
-          <button class="btn btn-sm" id="s-wb">生成世界观</button>
-          <button class="btn btn-sm" id="s-ch">生成角色档案</button></div></div>
+          <button class="btn btn-sm btn-primary" id="s-fields">保存设定</button></div></div>
         <div class="field"><label>一句话故事</label>
           <textarea class="ta" id="e-premise" style="min-height:56px">${esc(f.premise||'')}</textarea></div>
         <div class="field"><label>背景设定</label>
           <textarea class="ta" id="e-bg">${esc(f.background||'')}</textarea></div></div>
-      <div class="card"><div class="card-head"><div class="card-title">世界观圣经</div>
-        <div class="card-sub">${(p.world_bible||'').length} 字</div></div>
-        <div id="wb-out" class="prose" style="max-height:400px;overflow-y:auto">${esc(p.world_bible)||'<span style="color:var(--text-3)">尚未生成</span>'}</div></div>
-      <div class="card"><div class="card-head"><div class="card-title">角色档案</div>
-        <div class="card-sub">${(p.characters||'').length} 字</div></div>
-        <div id="ch-out" class="prose" style="max-height:400px;overflow-y:auto">${esc(p.characters)||'<span style="color:var(--text-3)">尚未生成</span>'}</div></div>`;
+      ${editableDoc('world_bible','世界观圣经', p.world_bible,
+        '<button class="btn btn-sm" id="s-wb">重新生成</button>')}
+      ${editableDoc('characters','角色档案', p.characters,
+        '<button class="btn btn-sm" id="s-ch">重新生成</button>')}
+      ${editableDoc('era_card','时代红线卡', p.era_card||'')}
+      ${editableDoc('style_guide','写作守则（自审沉淀）', p.style_guide||'')}`;
   },
   outline(p) {
     const co = p.chapter_outlines || {};
     const keys = Object.keys(co).sort((a,b)=>a-b);
-    return `<div class="card"><div class="card-head"><div class="card-title">总纲</div>
-        <div class="card-actions"><button class="btn btn-sm" id="o-gen">生成总纲</button></div></div>
-        <div id="ol-out" class="prose" style="max-height:420px;overflow-y:auto">${esc(p.outline)||'<span style="color:var(--text-3)">尚未生成</span>'}</div></div>
+    return `${editableDoc('outline','总纲', p.outline,
+        '<button class="btn btn-sm" id="o-gen">重新生成</button>')}
       <div class="card"><div class="card-head"><div class="card-title">分章细纲</div>
-        <div class="card-sub">${keys.length} 章</div>
+        <div class="card-sub">${keys.length} 章 · 每章可独立编辑保存</div>
         <div class="card-actions"><button class="btn btn-sm" id="o-batch">续生成 10 章</button></div></div>
         <div class="scroll-y">${keys.length ? keys.map(k=>
           `<div style="padding:9px 0;border-bottom:1px solid var(--border)">
-            <div class="prose" style="font-size:13.5px">${esc(co[k])}</div></div>`).join('')
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:5px">
+              <span class="badge badge-neutral">第 ${k} 章</span>
+              <button class="btn btn-sm co-save" data-n="${k}" style="margin-left:auto">保存</button></div>
+            <textarea class="ta co-edit" data-n="${k}"
+              style="min-height:100px;font-size:13px">${esc(co[k])}</textarea></div>`).join('')
           : '<div class="empty">尚未生成细纲</div>'}</div></div>`;
   },
   chapters(p) {
@@ -211,6 +249,13 @@ const TabRender = {
             <select class="select" id="td-apply"><option value="1">是（世界观/角色/爽点/文风入库）</option>
               <option value="0">否（只看结果）</option></select></div></div>
         <div class="mono-log" id="td-out" style="margin-top:14px;max-height:420px">等待拆解…</div></div>`;
+  },
+  prompts(p) {
+    return `<div class="card"><div class="card-head"><div class="card-title">本书提示词</div>
+        <div class="card-sub">留空 = 用内置模板；填写后本书生效。支持变量替换</div>
+        <div class="card-actions"><button class="btn btn-sm btn-primary" id="pr-save">保存全部</button></div></div>
+        <div id="pr-list"><div class="card-sub">加载中…</div></div>
+        <div class="card-sub" style="margin-top:12px" id="pr-vars"></div></div>`;
   },
   quality(p) {
     return `<div class="card"><div class="card-head"><div class="card-title">三层质检</div>
@@ -267,11 +312,29 @@ const TabRender = {
 const TabMount = {
   overview() { const r=$('#a-refresh'); if(r) r.onclick = () => openProject(S.cur.slug); },
   setup() {
-    $('#s-wb').onclick = () => runStep('world_bible', '#wb-out', '生成世界观');
-    $('#s-ch').onclick = () => runStep('characters', '#ch-out', '生成角色档案');
+    bindDocSaves();
+    $('#s-wb').onclick = () => runStep('world_bible', '.doc-edit[data-doc="world_bible"]', '生成世界观');
+    $('#s-ch').onclick = () => runStep('characters', '.doc-edit[data-doc="characters"]', '生成角色档案');
+    $('#s-fields').onclick = async () => {
+      const meta = S.cur.meta;
+      meta.fields = {...(meta.fields||{}), premise: $('#e-premise').value, background: $('#e-bg').value};
+      // 走 doc 通道以外的轻量保存: 直接 PUT prompts（meta 保存借道）
+      await fetch(`/api/projects/${encodeURIComponent(S.cur.slug)}/fields`,
+        {method:'PUT', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify(meta.fields)}).then(r=>{
+           if(r.ok) toast('设定已保存','ok'); else toast('保存失败','err');});
+    };
   },
   outline() {
-    $('#o-gen').onclick   = () => runStep('outline', '#ol-out', '生成总纲');
+    bindDocSaves();
+    $$('.co-save').forEach(b => b.onclick = async () => {
+      const n = b.dataset.n;
+      const r = await fetch(`/api/projects/${encodeURIComponent(S.cur.slug)}/chapter_outline/${n}`,
+        {method:'PUT', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({text: $(`.co-edit[data-n="${n}"]`).value})});
+      toast(r.ok ? `第 ${n} 章细纲已保存` : '保存失败', r.ok ? 'ok' : 'err');
+    });
+    $('#o-gen').onclick   = () => runStep('outline', '.doc-edit[data-doc="outline"]', '生成总纲');
     $('#o-batch').onclick = () => {
       const done = Object.keys(S.cur.chapter_outlines||{}).length;
       runStep('chapter_outlines', null, '生成细纲', {n: done+1, count: 10});
@@ -308,6 +371,27 @@ const TabMount = {
         onDone: () => { $('#td-go').disabled = false; toast('拆书完成', 'ok'); }
       });
     };
+  },
+  prompts() {
+    const slug = encodeURIComponent(S.cur.slug);
+    (async () => {
+      const d = await API.get(`/api/projects/${slug}/prompts`);
+      $('#pr-vars').innerHTML = '可用变量：' + d.variables.map(v =>
+        `<code>${esc(v)}</code>`).join(' ');
+      $('#pr-list').innerHTML = Object.entries(d.keys).map(([k, label]) => `
+        <div class="field"><label>${esc(label)} <span class="card-sub">(${esc(k)})</span></label>
+          <div class="card-sub" style="margin-bottom:4px">${esc((d.defaults[k]||'').slice(0,160))}</div>
+          <textarea class="ta pr-edit" data-k="${esc(k)}"
+            style="min-height:90px;font-family:var(--mono);font-size:12.5px"
+            placeholder="留空使用内置模板">${esc(d.overrides[k]||'')}</textarea></div>`).join('');
+      $('#pr-save').onclick = async () => {
+        const body = {};
+        $$('.pr-edit').forEach(t => body[t.dataset.k] = t.value);
+        const r = await fetch(`/api/projects/${slug}/prompts`,
+          {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+        toast(r.ok ? '提示词已保存，本书后续生成生效' : '保存失败', r.ok ? 'ok' : 'err');
+      };
+    })();
   },
   quality() {
     const slug = encodeURIComponent(S.cur.slug);
@@ -489,13 +573,21 @@ async function toggleAuto() {
   if (running) { await API.auto(S.cur.slug, {stop:true}); toast('已请求停止'); return; }
   const left = S.cur.meta.target_chapters - (S.cur.state.done||[]).length;
   modal(`<h2>自动创作</h2><div class="modal-sub">
-      世界观 → 角色 → 总纲 → 分章细纲 → 逐章正文 → AI 味自审 → 不合格自动重写</div>
+      世界观 → 角色 → 总纲 → 分章细纲 → 逐章正文 → 多遍评审 → 不合格自动重写</div>
+    <div class="field"><label>模式</label><div class="pill-group" id="au-mode">
+      <div class="pill active" data-v="auto">全自动<br><span class="card-sub">一路写到底，不打断</span></div>
+      <div class="pill" data-v="staged">阶段自动<br><span class="card-sub">每阶段停下来，你审阅/编辑后再继续</span></div>
+    </div></div>
     <div class="field"><label>本次写到第几章（剩余 ${left} 章）</label>
       <input class="input" id="au-n" type="number" value="${Math.min((S.cur.state.done||[]).length+5, S.cur.meta.target_chapters)}"></div>
     <div class="modal-foot"><button class="btn" onclick="closeModal()">取消</button>
       <button class="btn btn-primary" id="au-go">开始</button></div>`, { onMount() {
+      $$('#au-mode .pill').forEach(x => x.onclick = () => {
+        $$('#au-mode .pill').forEach(y=>y.classList.remove('active')); x.classList.add('active');
+      });
       $('#au-go').onclick = async () => {
-        await API.auto(S.cur.slug, {upto: +$('#au-n').value});
+        await API.auto(S.cur.slug, {upto: +$('#au-n').value,
+          mode: $('#au-mode .pill.active').dataset.v});
         closeModal(); toast('已启动后台创作', 'ok'); startPoll();
       };
   }});

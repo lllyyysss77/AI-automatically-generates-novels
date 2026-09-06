@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -325,7 +326,122 @@ def c17(page):
     page.wait_for_timeout(800)
 
 
-CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17]
+@case(18, "全面可编辑审阅：设定/大纲/细纲/正文/提示词逐块真编辑真保存")
+def c18(page):
+    """逐个面板真点、真改、真存、刷新后仍在 —— 杜绝「只有一两块能编辑」。"""
+    import time as _t
+    # 隔离: 建专用测试项目, 不污染真实书稿
+    r = page.request.post(f"{BASE}/api/projects", data=json.dumps({
+        "title": "E2E可编辑测试", "type_id": "novel", "genre_id": "urban",
+        "style_id": "dushi-zhongsheng", "target_words": 10000,
+        "fields": {"premise": "测试", "background": "测试"}}),
+        headers={"Content-Type": "application/json"})
+    slug = r.json()["slug"]
+    # 预置最小产物, 让每个面板都有可编辑对象
+    for doc in ("world_bible", "characters", "outline", "era_card", "style_guide"):
+        page.request.put(f"{BASE}/api/projects/{slug}/doc/{doc}",
+            data=json.dumps({"text": f"{doc} 初始内容"}),
+            headers={"Content-Type": "application/json"})
+    page.request.put(f"{BASE}/api/projects/{slug}/chapter_outline/1",
+        data=json.dumps({"text": "第1章 测试\n剧情1：测试事件"}),
+        headers={"Content-Type": "application/json"})
+    page.request.post(f"{BASE}/api/projects/{slug}/chapter/1",
+        data=json.dumps({"text": "「测试。」他说。这是第一章正文，长度需要超过验证阈值。" * 20}),
+        headers={"Content-Type": "application/json"})
+    page.goto(BASE, wait_until="networkidle")
+    page.wait_for_selector(".proj-item", timeout=15000)
+    page.locator(f'.proj-item[data-slug="{slug}"]').click()
+    page.wait_for_selector(".tabs", timeout=15000)
+    mark = f"[E2E{int(_t.time())%100000}]"
+    edited = []
+
+    def save_and_check(ta_sel, btn_sel, name):
+        page.wait_for_selector(ta_sel, timeout=15000)
+        orig = page.input_value(ta_sel)
+        page.fill(ta_sel, (orig or "") + "\n" + mark)
+        page.click(btn_sel)
+        page.wait_for_selector(".toast", timeout=10000)
+        edited.append(name)
+
+    # 设定页 4 块
+    page.click('.tab[data-tab="setup"]')
+    for k in ("world_bible", "characters", "era_card", "style_guide"):
+        save_and_check(f'.doc-edit[data-doc="{k}"]',
+                       f'.doc-save[data-doc="{k}"]', k)
+    # 大纲页: 总纲 + 第一条细纲
+    page.click('.tab[data-tab="outline"]')
+    save_and_check('.doc-edit[data-doc="outline"]', '.doc-save[data-doc="outline"]', "outline")
+    page.wait_for_selector(".co-edit", timeout=15000)
+    first_n = page.locator(".co-save").first.get_attribute("data-n")
+    save_and_check(f'.co-edit[data-n="{first_n}"]', f'.co-save[data-n="{first_n}"]',
+                   f"chapter_outline_{first_n}")
+    # 正文
+    page.click('.tab[data-tab="chapters"]')
+    page.wait_for_selector(".chapter-row", timeout=15000)
+    page.locator(".chapter-row").first.click()
+    page.wait_for_timeout(1500)
+    body = page.input_value("#c-body")
+    page.fill("#c-body", body + "\n" + mark)
+    page.click("#c-save")
+    page.wait_for_selector(".toast", timeout=15000)
+    edited.append("chapter_body")
+    # 提示词页
+    page.click('.tab[data-tab="prompts"]')
+    page.wait_for_selector(".pr-edit", timeout=15000)
+    n_prompts = page.locator(".pr-edit").count()
+    assert n_prompts >= 5, f"提示词可编辑块只有 {n_prompts} 个"
+    page.fill('.pr-edit[data-k="content_extra"]', "测试追加指令" + mark)
+    page.click("#pr-save")
+    page.wait_for_selector(".toast", timeout=10000)
+    edited.append("prompts")
+
+    # 刷新后逐一验证持久化
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".proj-item", timeout=15000)
+    page.locator(f'.proj-item[data-slug="{slug}"]').click()
+    page.wait_for_selector(".tabs", timeout=15000)
+    page.click('.tab[data-tab="setup"]')
+    page.wait_for_selector('.doc-edit[data-doc="world_bible"]', timeout=15000)
+    assert mark in page.input_value('.doc-edit[data-doc="world_bible"]'), "世界观编辑未持久化"
+    page.click('.tab[data-tab="prompts"]')
+    page.wait_for_selector('.pr-edit[data-k="content_extra"]', timeout=15000)
+    assert mark in page.input_value('.pr-edit[data-k="content_extra"]'), "提示词未持久化"
+    assert len(edited) >= 8, f"可编辑面不足: {edited}"
+    shot(page, "18-editable-all")
+    import shutil, pathlib
+    shutil.rmtree(pathlib.Path("projects") / slug, ignore_errors=True)
+
+
+@case(19, "阶段自动模式：入口存在且模式可选")
+def c19(page):
+    open_first_project(page)
+    page.click("#a-auto")
+    page.wait_for_selector("#au-mode", timeout=10000)
+    pills = page.locator("#au-mode .pill").count()
+    assert pills == 2, f"模式选项 {pills} 个（应为 全自动/阶段自动）"
+    t = page.locator("#au-mode").inner_text()
+    assert "全自动" in t and "阶段自动" in t
+    page.locator('#au-mode .pill[data-v="staged"]').click()
+    assert "active" in (page.locator('#au-mode .pill[data-v="staged"]')
+                        .get_attribute("class") or "")
+    shot(page, "19-staged-mode")
+    page.evaluate("closeModal()")
+
+
+@case(20, "插件包 API：可读且保护 id 不被改")
+def c20(page):
+    r = page.request.get(f"{BASE}/api/pack/style/dushi-zhongsheng")
+    assert r.ok, f"读包失败 {r.status}"
+    d = r.json()
+    assert d.get("opening") and d.get("descriptionBudget"), "文风包缺写法纪律字段"
+    bad = page.request.put(f"{BASE}/api/pack/style/dushi-zhongsheng",
+                           data=json.dumps({"id": "hacked"}),
+                           headers={"Content-Type": "application/json"})
+    assert bad.status == 400, "改 id 未被拦截"
+
+
+CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15,
+         c16, c17, c18, c19, c20]
 
 
 def main():

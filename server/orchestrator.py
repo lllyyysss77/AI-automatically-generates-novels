@@ -413,6 +413,20 @@ class Novelist:
             return "alt"
         return "none"
 
+    # ---------- 提示词覆盖 ----------
+    # 每本书可在前端改自己的提示词模板, 存 meta.prompt_overrides。
+    # 可用变量与内置模板一致(${title} ${premise} ${background} ${genre_rules}...)。
+    PROMPT_KEYS = {
+        "world_bible": "世界观圣经生成",
+        "characters": "角色档案生成",
+        "outline": "总纲生成",
+        "chapter_outline_extra": "分章细纲·追加指令",
+        "content_extra": "正文·追加指令",
+    }
+
+    def prompt_override(self, key: str) -> str:
+        return ((self.p.meta.get("prompt_overrides") or {}).get(key) or "").strip()
+
     # ---------- 世界观锚定 ----------
     def world_anchor(self) -> Dict[str, Any]:
         """从世界观里抽出必须钉死的硬设定, 并推导禁用词。
@@ -763,7 +777,8 @@ class Novelist:
     # ---------- 步骤 ----------
     def step_world_bible(self, on_delta=None) -> str:
         ctx = self.base_ctx()
-        prompt = render(
+        ov = self.prompt_override("world_bible")
+        prompt = render(ov, ctx) if ov else render(
             "你是网文世界观设计师。为《${title}》写世界观圣经，2000 字以内，压缩、密集、可执行。\n\n"
             "【一句话故事】${premise}\n【背景】${background}\n\n【题材规范】\n${genre_rules}\n\n"
             "必须输出以下字段（用小标题分节）：\n"
@@ -785,7 +800,8 @@ class Novelist:
     def step_characters(self, on_delta=None) -> str:
         ctx = self.base_ctx()
         ctx["world_bible"] = self.p.read("world_bible.md")
-        prompt = render(
+        ov = self.prompt_override("characters")
+        prompt = render(ov, ctx) if ov else render(
             "基于世界观，为《${title}》设计角色档案。\n\n【世界观】\n${world_bible}\n\n"
             "【题材规范】\n${genre_rules}\n\n"
             "输出 10-14 个角色，格式严格如下（每人一节，标题行必须是「### N. 姓名：某某」）：\n"
@@ -821,7 +837,8 @@ class Novelist:
         ctx = self.base_ctx()
         ctx["world_bible"] = self.p.read("world_bible.md")
         ctx["characters"] = self.p.read("characters.md")
-        prompt = render(lvl["prompt"], ctx)
+        ov = self.prompt_override("outline")
+        prompt = render(ov or lvl["prompt"], ctx)
         r = call("planning", prompt, on_delta, max_tokens=6000)
         ol = clean(r.text)
         self.p.write("outline.md", ol)
@@ -893,6 +910,8 @@ class Novelist:
         if anchor.get("main_place"):
             cons.append(f"主场固定在「{anchor['main_place']}」")
         cons.append("每章主角之外必须有 2 个以上配角有独立戏份")
+        if self.prompt_override("chapter_outline_extra"):
+            cons.append(self.prompt_override("chapter_outline_extra"))
         cons.append(self.genre_rules()[:800])
         vol = self.volume_of(start)
         if not vol:
@@ -988,6 +1007,7 @@ class Novelist:
             world_digest=L["L1_resident"][:4000],
             alias_rule=self.protagonist_alias(),
             style_pack=st,
+            extra_directive=self.prompt_override("content_extra"),
             roster=rost, protagonist=((self.alias_pair() or [None])[0]
                                       or (rost[0]["name"] if rost else "")),
             relations=f.get("relationships", ""),
@@ -1802,6 +1822,26 @@ class Novelist:
         if lim and USAGE["calls"] >= lim:
             raise RuntimeError(f"已达调用预算上限 {lim} 次（config/settings.yaml → "
                                f"limits.daily_call_budget），本次停止")
+
+    def save_doc(self, name: str, text: str) -> Dict[str, Any]:
+        """前端编辑保存 世界观/角色/总纲/守则/时代卡, 并做联动更新。"""
+        FILES = {"world_bible": "world_bible.md", "characters": "characters.md",
+                 "outline": "outline.md", "style_guide": "style_guide.md",
+                 "era_card": "era_card.md"}
+        if name not in FILES:
+            raise ValueError(f"不可编辑的文档 {name}")
+        self.p.write(FILES[name], text)
+        out = {"ok": True, "name": name, "chars": len(text)}
+        if name == "world_bible":
+            out["indexed"] = self.p.mem.index_document("world", "world_bible", text)
+            self.p.meta.pop("anchor", None); self.p.save()
+        elif name == "characters":
+            (self.p.dir / "roster.json").unlink(missing_ok=True)
+            out["indexed"] = self.p.mem.index_document("role", "characters", text)
+            out["roster"] = [c["name"] for c in self.roster()]
+        elif name == "era_card":
+            out["indexed"] = self.p.mem.index_document("fact", "era_card", text)
+        return out
 
     def _log(self, msg: str):
         ts = time.strftime("%H:%M:%S")

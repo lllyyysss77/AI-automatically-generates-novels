@@ -226,6 +226,7 @@ def project_detail(slug: str):
         "characters": p.read("characters.md"),
         "outline": p.read("outline.md"),
         "style_guide": p.read("style_guide.md"),
+        "era_card": p.read("era_card.md"),
         "rules": p._load("rules.json", {}),
         "system_issues": p.read("SYSTEM_ISSUES.md"),
         "volumes": p._load("volumes.json", []),
@@ -258,6 +259,11 @@ def save_chapter(slug: str, n: int):
     if p.cfg["memory"].get("index_chapters", True):
         p.mem.add("plot", f"ch{n}", f"第{n}章",
                   p.state.get("summaries", {}).get(str(n), "") + "\n" + text[:1500])
+    # 手动保存/导入的章节也要登记, 否则章节列表不显示（实测坑）
+    if n not in p.state.get("done", []):
+        p.state.setdefault("done", []).append(n)
+        p.state["current"] = max(p.state.get("current") or 0, n)
+        p.save()
     return jsonify({"ok": True, "audit": a})
 
 
@@ -280,6 +286,86 @@ def rewrite_api(slug: str, n: int):
             n, mode=b.get("mode", "polish"), note=b.get("note", "")))
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.put("/api/projects/<slug>/fields")
+def save_fields(slug: str):
+    p = Project(slug)
+    p.meta["fields"] = {**(p.meta.get("fields") or {}), **(request.json or {})}
+    p.save()
+    return jsonify({"ok": True})
+
+
+@app.put("/api/projects/<slug>/doc/<name>")
+def save_doc(slug: str, name: str):
+    """保存前端编辑的 世界观/角色/总纲/守则/时代卡。"""
+    try:
+        return jsonify(Novelist(Project(slug)).save_doc(
+            name, (request.json or {}).get("text", "")))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.put("/api/projects/<slug>/chapter_outline/<int:n>")
+def save_chapter_outline(slug: str, n: int):
+    """保存某章细纲。"""
+    p = Project(slug)
+    ol = p._load("chapter_outlines.json", {})
+    ol[str(n)] = (request.json or {}).get("text", "")
+    p.write("chapter_outlines.json", json.dumps(ol, ensure_ascii=False, indent=2))
+    return jsonify({"ok": True, "n": n})
+
+
+@app.route("/api/projects/<slug>/prompts", methods=["GET", "PUT"])
+def project_prompts(slug: str):
+    """项目级提示词：查看当前生效模板 / 保存覆盖。"""
+    p = Project(slug)
+    nv = Novelist(p)
+    if request.method == "PUT":
+        ov = {k: v for k, v in (request.json or {}).items()
+              if k in Novelist.PROMPT_KEYS and isinstance(v, str)}
+        p.meta["prompt_overrides"] = {k: v for k, v in ov.items() if v.strip()}
+        p.save()
+        return jsonify({"ok": True, "overrides": list(p.meta["prompt_overrides"])})
+    # GET: 每个键给 当前覆盖 + 内置默认说明 + 可用变量
+    lvl0 = (nv.type.get("levels") or [{}])[0]
+    defaults = {
+        "world_bible": "内置：世界观圣经模板（含架空/正史硬约束）",
+        "characters": "内置：角色档案模板（10-14 人，标题行「### N. 姓名：某某」）",
+        "outline": lvl0.get("prompt", "")[:500],
+        "chapter_outline_extra": "（追加到细纲生成的约束清单末尾）",
+        "content_extra": "（追加到正文提示词末尾，优先级最高）",
+    }
+    return jsonify({
+        "keys": Novelist.PROMPT_KEYS,
+        "overrides": p.meta.get("prompt_overrides") or {},
+        "defaults": defaults,
+        "variables": ["${title}", "${premise}", "${background}", "${characters}",
+                       "${relationships}", "${kb}", "${style}", "${genre_rules}",
+                       "${style_rules}", "${common_rules}", "${world_bible}",
+                       "${target_chapters}", "${target_words}"],
+    })
+
+
+@app.route("/api/pack/<kind>/<pid>", methods=["GET", "PUT"])
+def pack_edit(kind: str, pid: str):
+    """插件包查看与编辑（type/genre/style），前端「插件包」页用。"""
+    from server.registry import PACKS
+    if kind not in ("type", "genre", "style"):
+        return jsonify({"error": "kind 须为 type/genre/style"}), 400
+    f = PACKS / kind / f"{pid}.json"
+    if not f.exists():
+        return jsonify({"error": "不存在"}), 404
+    if request.method == "PUT":
+        try:
+            data = request.json
+            assert isinstance(data, dict) and data.get("id") == pid
+        except Exception:
+            return jsonify({"error": "须为合法 JSON 且 id 不变"}), 400
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        registry.reload()
+        return jsonify({"ok": True})
+    return jsonify(json.loads(f.read_text(encoding="utf-8")))
 
 
 @app.get("/api/projects/<slug>/memory")
@@ -485,17 +571,30 @@ def step(slug: str):
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _auto_worker(slug: str, upto: int):
+def _auto_worker(slug: str, upto: int, staged: bool = False):
+    """staged=True 时每完成一个阶段就暂停，等用户在前端审阅/编辑后点「继续」。"""
     p = Project(slug)
     nv = Novelist(p)
     job = JOBS[slug]
+
+    def pause(done_stage: str) -> bool:
+        if staged:
+            job.update({"waiting": True, "stage": f"{done_stage} · 待审阅",
+                        "running": False})
+            return True
+        return False
+
     try:
+        job["mode"] = "staged" if staged else "auto"
         if not p.read("world_bible.md"):
             job["stage"] = "世界观"; nv.step_world_bible()
+            if pause("世界观"): return
         if not p.read("characters.md"):
             job["stage"] = "角色档案"; nv.step_characters()
+            if pause("角色档案"): return
         if not p.read("outline.md"):
             job["stage"] = "总纲"; nv.step_outline()
+            if pause("总纲"): return
         batch = p.cfg["generation"]["outline_batch"]
         n = (p.state.get("current") or 0) + 1
         end = min(upto, p.meta["target_chapters"])
@@ -506,6 +605,10 @@ def _auto_worker(slug: str, upto: int):
             r = nv.step_chapter(n)
             job.update({"last": r, "done": len(p.state["done"]), "words": p.total_words})
             n += 1
+            if staged and (n - 1) % batch == 0 and n <= end:
+                job.update({"waiting": True, "running": False,
+                            "stage": f"已写到第 {n-1} 章 · 待审阅"})
+                return
         job["stage"] = "已停止" if job.get("stop") else "完成"
     except Exception as e:
         job["stage"] = "出错"; job["error"] = str(e)
@@ -524,9 +627,12 @@ def auto(slug: str):
     if JOBS.get(slug, {}).get("running"):
         return jsonify({"ok": False, "msg": "已在运行"}), 409
     upto = int(b.get("upto") or 5)
-    JOBS[slug] = {"running": True, "stop": False, "stage": "启动中", "upto": upto}
-    threading.Thread(target=_auto_worker, args=(slug, upto), daemon=True).start()
-    return jsonify({"ok": True})
+    staged = (b.get("mode") == "staged")
+    JOBS[slug] = {"running": True, "stop": False, "stage": "启动中",
+                  "upto": upto, "mode": "staged" if staged else "auto"}
+    threading.Thread(target=_auto_worker, args=(slug, upto, staged),
+                     daemon=True).start()
+    return jsonify({"ok": True, "mode": "staged" if staged else "auto"})
 
 
 @app.get("/api/projects/<slug>/job")
