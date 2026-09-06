@@ -43,6 +43,10 @@ def split_chapters(text: str) -> List[Dict[str, Any]]:
                 buf.append("\n".join(cur)); cur, cn = [], 0
         if cur:
             buf.append("\n".join(cur))
+        # 整本没有换行时按行聚合只会得到 1 段 —— 退化为按字符定长切
+        if len(buf) < 2 and text.strip():
+            step = 4500
+            buf = [text[i:i + step] for i in range(0, len(text), step)]
         chapters = [{"n": i + 1, "title": f"片段{i+1}", "text": t}
                     for i, t in enumerate(buf)]
     return chapters

@@ -440,8 +440,58 @@ def c20(page):
     assert bad.status == 400, "改 id 未被拦截"
 
 
+@case(21, "UI 可用性：全部页面/标签可达且零 JS 错误")
+def c21(page):
+    """把每个视图和每个项目标签都点一遍 —— 任一页面抛 JS 错误即失败。
+    之前「提示词变量被模板字符串求值」导致整页白屏就是这类问题。"""
+    errs = []
+    page.on("pageerror", lambda e: errs.append(str(e)))
+    page.goto(BASE, wait_until="networkidle")
+    for view in ("dashboard", "settings", "packs"):
+        page.click(f'.nav-item[data-view="{view}"]')
+        page.wait_for_timeout(600)
+        assert page.locator("#view .card, #view .stat").count() > 0, f"{view} 页空白"
+    page.click('.nav-item[data-view="dashboard"]')
+    page.wait_for_selector(".proj-card", timeout=15000)
+    page.locator(".proj-card").first.click()
+    page.wait_for_selector(".tabs", timeout=15000)
+    tabs = [t.get_attribute("data-tab") for t in page.locator(".tab").all()]
+    assert len(tabs) >= 9, f"项目标签只有 {len(tabs)} 个: {tabs}"
+    for t in tabs:
+        page.click(f'.tab[data-tab="{t}"]')
+        page.wait_for_timeout(500)
+        assert page.locator("#view .card").count() > 0, f"标签 {t} 页空白"
+    assert not errs, f"JS 错误 {len(errs)} 条: {errs[:3]}"
+    shot(page, "21-usability")
+
+
+@case(22, "UI 简易性：新建项目三步可达、关键动作一屏可见")
+def c22(page):
+    page.goto(BASE, wait_until="networkidle")
+    # 第 1 步: 侧栏新建入口可见
+    assert page.locator("#btn-new").is_visible(), "新建入口不可见"
+    page.click("#btn-new")
+    # 第 2 步: 弹窗即含全部必填项, 不需要翻页
+    page.wait_for_selector("#f-title", timeout=8000)
+    for sel in ("#f-title", "#f-type", "#f-genre", "#f-style", "#f-words", "#f-ok"):
+        assert page.locator(sel).is_visible(), f"{sel} 不在首屏"
+    page.evaluate("closeModal()")
+    # 项目页: 自动创作按钮常驻顶栏
+    page.wait_for_selector(".proj-card", timeout=15000)
+    page.locator(".proj-card").first.click()
+    page.wait_for_selector("#a-auto", timeout=15000)
+    assert page.locator("#a-auto").is_visible(), "自动创作按钮不可见"
+    # 章节页: 选章 → 正文 ≤2 步
+    page.click('.tab[data-tab="chapters"]')
+    page.wait_for_selector(".chapter-row", timeout=15000)
+    page.locator(".chapter-row").first.click()
+    page.wait_for_timeout(1200)
+    assert len(page.input_value("#c-body")) > 100, "两步内未见正文"
+    shot(page, "22-simplicity")
+
+
 CASES = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15,
-         c16, c17, c18, c19, c20]
+         c16, c17, c18, c19, c20, c21, c22]
 
 
 def main():

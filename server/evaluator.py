@@ -194,12 +194,6 @@ def audit(text: str, extra_blacklist: List[str] | None = None,
     }
 
 
-def consistency(chapters: List[str], names: List[str]) -> Dict[str, Any]:
-    """L2 一致性: 角色出场统计 + 疑似别名检测."""
-    text = "\n".join(chapters)
-    appear = {n: text.count(n) for n in names}
-    missing = [n for n, c in appear.items() if c == 0]
-    return {"appearances": appear, "never_appeared": missing}
 
 
 # ------------------------------------------------------------------ 全书体检

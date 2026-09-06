@@ -45,7 +45,9 @@ class Memory:
 
     # ---------- 写入 ----------
     def add(self, kind: str, ref: str, title: str, body: str) -> None:
-        self.db.execute("DELETE FROM mem WHERE kind=? AND ref=?", (kind, ref))
+        # 同时删 bigram 行与 raw 行 —— 只删前者会让旧 raw 残留, 更新后仍搜到旧内容
+        self.db.execute("DELETE FROM mem WHERE kind IN (?, ?) AND ref=?",
+                        (kind, kind + "_raw", ref))
         self.db.execute("INSERT INTO mem(kind,ref,title,body) VALUES(?,?,?,?)",
                         (kind, ref, title, _bigrams(title + " " + body)))
         self.db.execute("INSERT INTO mem(kind,ref,title,body) VALUES(?,?,?,?)",
@@ -80,7 +82,9 @@ class Memory:
 
     # ---------- 检索 ----------
     def search(self, query: str, k: int = 6, kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        q = " OR ".join(set(_bigrams(query).split()[:40])) or query
+        q = " OR ".join(set(_bigrams(query).split()[:40]))
+        if not q.strip():
+            return []                      # 空查询直接返回, FTS MATCH '' 会抛错
         sql = "SELECT kind, ref, title, bm25(mem) AS s FROM mem WHERE mem MATCH ?"
         args: List[Any] = [q]
         if kinds:

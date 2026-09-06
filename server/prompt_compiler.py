@@ -35,7 +35,7 @@ def to_plot_list(outline: str) -> List[str]:
                         outline, re.M)
     out: List[str] = []
     for f in fields:
-        out += [s.strip() for s in re.split(r"[；;。]\s*", f) if len(s.strip()) > 4]
+        out += [s.strip() for s in re.split(r"[；;。]\s*", f) if len(s.strip()) >= 2]
     if out:
         return out
 
