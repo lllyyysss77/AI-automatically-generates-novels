@@ -640,6 +640,9 @@ class Novelist:
             recent_facts = cn[-40:]
             cons.append("【已确立的不可逆事实，绝对不得推翻】\n" + "；".join(
                 f"{c['subject']}{c['fact']}(第{c['chapter']}章)" for c in recent_facts))
+        era = self.era_card()
+        if era:
+            cons.append("【时代红线·写进正文即穿帮】\n" + era[:1600])
         guide = self.p.read("style_guide.md")
         if guide:
             cons.append("【本书写作守则·自审沉淀】\n" + guide[:1200])
@@ -1055,13 +1058,31 @@ class Novelist:
         if n not in self.p.state["done"]:
             self.p.state["done"].append(n)
         self.p.state["current"] = n
-        # 逐章评审: 让模型真读一遍
+        # 逐章评审: 让模型真读一遍; 评审发现的问题直接驱动重写
         crit = {}
         if self.q.get("critique_every_chapter", True):
             try:
                 crit = self.step_critique(n, text)
                 a["critique"] = {k: crit.get(k) for k in
                                  ("overall", "scores", "issues", "contradictions", "tics")}
+                # 评审不合格 → 用评审的具体发现当重写指令(而不是只报黑名单词)
+                fix_note = self._critique_to_note(crit)
+                if (crit.get("overall") or 100) < self.q["audit_pass_score"] and fix_note:
+                    r3 = call("polishing",
+                        f"下面这章被主编批了，问题如下，逐条改掉。剧情主线不变，"
+                        f"字数保持 {target} 字左右。直接输出正文，无前言。\n\n"
+                        f"【主编意见】\n{fix_note}\n\n【原稿】\n{text}",
+                        on_delta, max_tokens=cap)
+                    t3 = re.sub(r"【字数标记[^】]*】\s*", "", clean(r3.text))
+                    if t3 and len(re.findall(r"[一-鿿]", t3)) >= target * 0.6:
+                        c3 = self.step_critique(n, t3)
+                        if (c3.get("overall") or 0) > (crit.get("overall") or 0):
+                            text, crit = t3, c3
+                            a["critique"] = {k: c3.get(k) for k in
+                                             ("overall", "scores", "issues",
+                                              "contradictions", "tics")}
+                            a["critique_rewritten"] = True
+                            self.p.write(self.p.chapter_path(n), text)
             except Exception as e:
                 self._log(f"评审失败(不阻塞写作): {e}")
 
@@ -1196,6 +1217,54 @@ class Novelist:
             return (int(cw[0]) + int(cw[1])) // 2
         return (self.g["chapter_words_min"] + self.g["chapter_words_max"]) // 2
 
+    # ---------------- 时代红线卡 ----------------
+    def era_card(self) -> str:
+        """「这个年代还没有什么」的负面清单 —— 一次生成全书复用。
+
+        实测都市重生 2005 的设定自洽只有 40 分, 全是时代错位:
+        微服务(2014+)、菜鸟驿站(2013)、支付宝个人转账(当时要网银盾)。
+        ground() 查的是「该年份有什么」, 防穿帮需要的是「还没有什么」。
+        """
+        cached = self.p.read("era_card.md")
+        if cached:
+            return cached
+        f = self.p.meta.get("fields", {})
+        era_hint = (f.get("background", "") + " " + f.get("premise", ""))[:300]
+        m = re.search(r"(\d{4})\s*年", era_hint)
+        if not m and self.history_mode() == "none":
+            return ""
+        era = m.group(1) + "年" if m else ""
+        if not era:
+            return ""
+        # 先检索实锚, 再让模型汇成卡片
+        facts = ""
+        try:
+            sx = registry.searcher()
+            if sx.available():
+                hits = []
+                for q in (f"{era} 智能手机 移动支付 普及情况",
+                          f"{era} 互联网 主流网站 技术",
+                          f"{era} 物价 工资 收入水平"):
+                    hits += sx.bind_cache(self.p.dir / "research").search(q, k=3)
+                facts = "\n".join(f"- {h['title']}: {h['content'][:200]}" for h in hits[:9])
+        except Exception:
+            pass
+        r = call("judging",
+            f"为一部设定在{era}的中国都市小说做「时代红线卡」，防止写出时代错位。\n"
+            + (f"检索到的参考：\n{facts}\n\n" if facts else "")
+            + f"输出两部分，条目化、每条一行、带具体年份：\n"
+            f"## {era}还没有（写进正文即穿帮）\n"
+            f"技术产品/平台/服务/流行语各列几条，注明它们实际出现的年份\n"
+            f"## {era}的真实水位\n"
+            f"普通人月薪/房价/一顿饭价格/主流手机与网络/通讯方式/支付方式\n"
+            f"只写确定的，拿不准的不写。直接输出，无前言。", max_tokens=1200)
+        card = clean(r.text)
+        if card:
+            self.p.write("era_card.md", card)
+            self.p.mem.index_document("fact", "era_card", card)
+            self._log(f"时代红线卡 {len(card)} 字")
+        return card
+
     # ---------------- 逐章评审 ----------------
     def canon(self) -> List[Dict[str, Any]]:
         return self.p._load("canon.json", [])
@@ -1225,7 +1294,10 @@ class Novelist:
         budget = int(self.cfg["generation"].get("critique_budget_chars") or 46000)
         prompt = critic_mod.build_prompt(
             title=self.p.meta.get("title", ""), n=n, text=text, prev_texts=prev,
-            world=self.p.read("world_bible.md"), roster=self.p.read("characters.md"),
+            world=(self.p.read("world_bible.md")
+                   + ("\n\n【时代红线】\n" + self.p.read("era_card.md")
+                      if self.p.read("era_card.md") else "")),
+            roster=self.p.read("characters.md"),
             canon=self.canon(), outline=self.p._load("chapter_outlines.json", {}).get(str(n), ""),
             budget_chars=budget, recalled=recalled, digests=digests,
             roles=self.p.state.get("roles", {}), timeline=timeline)
@@ -1243,6 +1315,23 @@ class Novelist:
                   f"问题{len(d.get('issues') or [])} 矛盾{len(d.get('contradictions') or [])} "
                   f"新事实+{added} / {r.elapsed:.1f}s")
         return d
+
+    @staticmethod
+    def _critique_to_note(crit: Dict[str, Any]) -> str:
+        """把评审的结构化发现编译成可执行的重写指令。"""
+        lines = []
+        for i in (crit.get("issues") or [])[:6]:
+            if i.get("severity") in ("high", "mid"):
+                lines.append(f"- [{i.get('dim')}] {i.get('what')}"
+                             + (f"（原文：{str(i.get('evidence'))[:60]}）"
+                                if i.get("evidence") else ""))
+        for c in (crit.get("contradictions") or [])[:3]:
+            lines.append(f"- [违背既定事实] {c.get('fact')}"
+                         + (f"（原文：{str(c.get('evidence'))[:60]}）"
+                            if c.get("evidence") else ""))
+        if crit.get("tics"):
+            lines.append("- [换掉这些套路] " + "；".join(crit["tics"][:4]))
+        return "\n".join(lines)
 
     # ---------------- 章节重写 ----------------
     def rewrite_chapter(self, n: int, mode: str = "polish", note: str = "",
@@ -1445,6 +1534,9 @@ class Novelist:
             recent_facts = cn[-40:]
             cons.append("【已确立的不可逆事实，绝对不得推翻】\n" + "；".join(
                 f"{c['subject']}{c['fact']}(第{c['chapter']}章)" for c in recent_facts))
+        era = self.era_card()
+        if era:
+            cons.append("【时代红线·写进正文即穿帮】\n" + era[:1600])
         guide = self.p.read("style_guide.md")
         rules = self.learned_rules()
         target = self.target_words()

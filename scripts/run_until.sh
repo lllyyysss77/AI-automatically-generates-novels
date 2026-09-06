@@ -27,7 +27,9 @@ echo "=== 长跑启动 $(date '+%F %T')  目标 $TARGET 章，当前 $(count) �
 while [ "$(count)" -lt "$TARGET" ]; do
   BEFORE=$(count)
   python3 -u run_novel.py run --title "$TITLE" --chapters "$BATCH" >> "$LOG" 2>&1
+  RC=$?
   AFTER=$(count)
+  [ "$RC" -eq 3 ] && { echo "-- 代码已更新，热轮转 $(date '+%T')" | tee -a "$LOG"; FAILS=0; continue; }
   if [ "$AFTER" -le "$BEFORE" ]; then
     FAILS=$((FAILS+1))
     echo "!! 本轮无进展（$BEFORE -> $AFTER），第 $FAILS 次；60s 后重试" | tee -a "$LOG"

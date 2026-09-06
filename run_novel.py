@@ -40,6 +40,23 @@ def cmd_init(a):
     print(f"  题材={a.genre} 文风={a.style} 模型={p.meta['model']}")
 
 
+def _code_stamp() -> str:
+    """关键代码与配置的版本戳。worker 每章开工前核对, 变了就退出让守护重启。
+
+    本会话踩过 3 次: 改了代码, 跑着的旧进程还在用旧逻辑写稿, 甚至新旧双跑
+    并发写同一章。热更新一致性必须由框架保证, 不能靠人记得杀进程。"""
+    import hashlib
+    h = hashlib.sha1()
+    root = Path(__file__).resolve().parent
+    for f in sorted((root / "server").rglob("*.py")) +              sorted((root / "config").glob("*.yaml")) +              sorted((root / "packs").rglob("*.json")):
+        try:
+            st = f.stat()
+            h.update(f"{f.name}:{st.st_mtime_ns}:{st.st_size}".encode())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
 def cmd_run(a):
     p = Project(slugify(a.title))
     if not p.meta:
@@ -55,6 +72,7 @@ def cmd_run(a):
         print("[3/4] 总纲"); nv.step_outline()
 
     print("[4/4] 逐章生成")
+    stamp = _code_stamp()
     batch = p.cfg["generation"]["outline_batch"]
     start = (p.state.get("current") or 0) + 1
     end = min(start + a.chapters - 1, p.meta["target_chapters"])
@@ -64,6 +82,9 @@ def cmd_run(a):
         if str(n) not in outlines:
             print(f"  → 生成第 {n}-{n+batch-1} 章细纲")
             nv.step_chapter_outlines(n, batch)
+        if _code_stamp() != stamp:
+            print("!! 代码或配置已更新，本进程退出交由守护以新版本续跑")
+            sys.exit(3)
         r = nv.step_chapter(n)
         print(f"  ✓ 第{r['chapter']}章 {r['chars']}字 得分{r['score']}"
               f"{' [已重写]' if r['rewritten'] else ''} {r['elapsed']:.1f}s")
