@@ -1292,19 +1292,45 @@ class Novelist:
                     sorted(tl.items(), key=lambda x: int(x[0]))[-12:] if v]
 
         budget = int(self.cfg["generation"].get("critique_budget_chars") or 46000)
-        prompt = critic_mod.build_prompt(
-            title=self.p.meta.get("title", ""), n=n, text=text, prev_texts=prev,
-            world=(self.p.read("world_bible.md")
-                   + ("\n\n【时代红线】\n" + self.p.read("era_card.md")
-                      if self.p.read("era_card.md") else "")),
-            roster=self.p.read("characters.md"),
-            canon=self.canon(), outline=self.p._load("chapter_outlines.json", {}).get(str(n), ""),
-            budget_chars=budget, recalled=recalled, digests=digests,
-            roles=self.p.state.get("roles", {}), timeline=timeline)
-        r = call("judging", prompt, on_delta, max_tokens=2000)
-        d = critic_mod.parse(clean(r.text))
-        if not d:
+        n_pass = max(1, min(3, int(self.q.get("critique_passes", 2) or 2)))
+        world_plus = (self.p.read("world_bible.md")
+                      + ("\n\n【时代红线】\n" + self.p.read("era_card.md")
+                         if self.p.read("era_card.md") else ""))
+        outline_txt = self.p._load("chapter_outlines.json", {}).get(str(n), "")
+
+        # 多遍读: 每遍换一个焦点, 一遍读不出所有问题
+        merged: Dict[str, Any] = {"scores": {}, "issues": [], "contradictions": [],
+                                  "new_facts": [], "tics": []}
+        elapsed = 0.0
+        for pi in range(n_pass):
+            spec = critic_mod.PASSES[pi]
+            prompt = critic_mod.build_prompt(
+                title=self.p.meta.get("title", ""), n=n, text=text, prev_texts=prev,
+                world=world_plus, roster=self.p.read("characters.md"),
+                canon=self.canon(), outline=outline_txt,
+                budget_chars=budget, recalled=recalled, digests=digests,
+                roles=self.p.state.get("roles", {}), timeline=timeline,
+                dims_override=spec["dims"], pass_name=spec["name"])
+            r = call("judging", prompt, on_delta, max_tokens=2000)
+            elapsed += r.elapsed
+            one = critic_mod.parse(clean(r.text))
+            if not one:
+                continue
+            merged["scores"].update(one.get("scores") or {})
+            for k in ("issues", "contradictions", "tics"):
+                merged[k] += one.get(k) or []
+            if pi == 0:                      # 事实抽取只做一遍, 避免重复入账
+                merged["new_facts"] = one.get("new_facts") or []
+        vals = [v for v in merged["scores"].values() if isinstance(v, (int, float))]
+        if not vals:
             return {"error": "评审未返回可解析结果"}
+        merged["overall"] = round(sum(vals) / len(vals))
+        merged["passes"] = n_pass
+        d = merged
+
+        class _R:                            # 兼容后面的日志字段
+            pass
+        r = _R(); r.elapsed = elapsed
 
         cn, added = critic_mod.merge_canon(self.canon(), d.get("new_facts"), n)
         if added:

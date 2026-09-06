@@ -15,14 +15,29 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-# 评审维度。分数 0-100，低于 pass_score 触发重写。
-DIMENSIONS = [
-    ("人物一致性", "人物的性格、能力、称谓、动机是否与前文一致；有没有临时变聪明或变蠢"),
-    ("设定自洽", "世界观、官职、技术水平、时间线是否自洽；有没有凭空出现的能力或身份"),
-    ("视角与人称", "叙述视角是否稳定；有没有让 A 角色知道只有 B 才知道的事"),
-    ("文风新鲜度", "有没有反复使用同一种叙述装置、同一个比喻、同一种钩子句式"),
-    ("剧情推进", "本章是否推进了主线；有没有原地打转或重复前面已发生的事"),
+# 多遍阅读 —— 一遍读不出所有问题（人读也一样）。每遍换一个焦点:
+#   第 1 遍逻辑读: 盯剧情、人物、设定、事实
+#   第 2 遍文字读: 盯文风、套路、描写密度、开篇与钩子
+#   第 3 遍衔接读(可选): 盯与上一章的承接、称谓与时间连续性
+PASSES = [
+    {"name": "逻辑读", "dims": [
+        ("人物一致性", "人物的性格、能力、称谓、动机是否与前文一致；有没有临时变聪明或变蠢"),
+        ("设定自洽", "世界观、官职、技术水平、时间线是否自洽；时代红线是否被踩"),
+        ("视角与人称", "叙述视角是否稳定；有没有让 A 角色知道只有 B 才知道的事"),
+        ("剧情推进", "本章是否推进主线；有没有原地打转或重复前文"),
+    ]},
+    {"name": "文字读", "dims": [
+        ("文风新鲜度", "有没有反复使用同一叙述装置、同一比喻、同一钩子句式"),
+        ("描写配给", "环境描写是否超配额；情绪形容词与比喻是否过密；有没有文学腔糊墙"),
+        ("开篇与钩子", "第一句是否以对白/动作/事件开场；结尾钩子是否具体、是否与前几章雷同"),
+        ("对白质感", "人物说话是否有各自腔调；有没有连续的说明式对白"),
+    ]},
+    {"name": "衔接读", "dims": [
+        ("承接", "开头是否接住上一章的钩子；时间、地点、人物状态是否无缝衔接"),
+        ("称谓连续", "对人物的称呼是否与前文一致；主角身份口径是否统一"),
+    ]},
 ]
+DIMENSIONS = PASSES[0]["dims"] + PASSES[1]["dims"]
 
 CRITIQUE_SCHEMA = (
     '{"scores":{"人物一致性":85,"设定自洽":70,"视角与人称":90,'
@@ -42,7 +57,9 @@ def build_prompt(*, title: str, n: int, text: str, prev_texts: List[str],
                  recalled: Optional[List[Dict[str, Any]]] = None,
                  digests: Optional[List[str]] = None,
                  roles: Optional[Dict[str, Any]] = None,
-                 timeline: Optional[List[str]] = None) -> str:
+                 timeline: Optional[List[str]] = None,
+                 dims_override: Optional[List[tuple]] = None,
+                 pass_name: str = "") -> str:
     """按预算装配评审上下文。
 
     64k 不是用来灌原文的 —— 灌原文只装得下四五章。走索引与压缩才能让
@@ -84,11 +101,12 @@ def build_prompt(*, title: str, n: int, text: str, prev_texts: List[str],
         parts.append(f"【{name}】\n{b}")
         used += len(b)
 
-    dims = "\n".join(f"  {i+1}. {d}：{desc}" for i, (d, desc) in enumerate(DIMENSIONS))
+    dims_list = dims_override if dims_override else DIMENSIONS
+    dims = "\n".join(f"  {i+1}. {d}：{desc}" for i, (d, desc) in enumerate(dims_list))
     return (
-        f"你是网文主编，正在逐章审读《{title}》第 {n} 章。请**真读正文**，"
-        f"不要只看指标。\n\n" + "\n\n".join(parts) + "\n\n"
-        f"===\n按以下 5 个维度打分（0-100）并给出问题：\n{dims}\n\n"
+        f"你是网文主编，正在逐章审读《{title}》第 {n} 章（{pass_name or '通读'}）。"
+        f"请**真读正文**，不要只看指标。\n\n" + "\n\n".join(parts) + "\n\n"
+        f"===\n按以下维度打分（0-100）并给出问题：\n{dims}\n\n"
         f"重点抓这几类（这些是统计查不出来的）：\n"
         f"- 叙述拐杖：反复使用同一种叙述装置（如每章都写「某人在脑中冷静计算」）\n"
         f"- 身份/官职凭空变化，前文从未交代\n"
